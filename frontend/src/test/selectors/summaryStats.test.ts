@@ -1,0 +1,125 @@
+import { describe, it, expect } from 'vitest';
+import { computeSummaryStats } from '../../selectors/summaryStats';
+
+const makeRow = (type: string, state: string, effortTotal: number, progressPct: number) => ({
+  type,
+  state,
+  effortTotal,
+  progressPct,
+});
+
+describe('computeSummaryStats', () => {
+  it('returns zero stats for empty inputs', () => {
+    const result = computeSummaryStats([], {});
+    expect(result.totalItems).toBe(0);
+    expect(result.overallProgressPct).toBe(0);
+    expect(result.totalEffort).toBe(0);
+    expect(result.byType).toEqual({});
+    expect(result.byState).toEqual({});
+  });
+
+  it('counts all items in rowsById for totalItems', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 10, 50),
+      2: makeRow('Feature', 'Closed', 5, 100),
+      3: makeRow('Task', 'Active', 2, 0),
+    };
+    const result = computeSummaryStats([1], rowsById);
+    expect(result.totalItems).toBe(3);
+  });
+
+  it('sums effortTotal of roots only for totalEffort', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 10, 50),
+      2: makeRow('Feature', 'Active', 5, 80),
+    };
+    // Only root 1 — child 2 not in rootIds
+    const result = computeSummaryStats([1], rowsById);
+    expect(result.totalEffort).toBe(10);
+  });
+
+  it('computes effort-weighted progress when totalEffort > 0', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 10, 0),
+      2: makeRow('Epic', 'Active', 10, 100),
+    };
+    // weighted: (0*10 + 100*10) / 20 = 50
+    const result = computeSummaryStats([1, 2], rowsById);
+    expect(result.totalEffort).toBe(20);
+    expect(result.overallProgressPct).toBe(50);
+  });
+
+  it('falls back to simple average when totalEffort is 0', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 0, 20),
+      2: makeRow('Feature', 'Active', 0, 80),
+    };
+    const result = computeSummaryStats([1, 2], rowsById);
+    expect(result.totalEffort).toBe(0);
+    // simple avg: (20 + 80) / 2 = 50
+    expect(result.overallProgressPct).toBe(50);
+  });
+
+  it('counts byType across ALL items in rowsById', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 10, 50),
+      2: makeRow('Feature', 'Active', 5, 80),
+      3: makeRow('Feature', 'Closed', 3, 100),
+    };
+    const result = computeSummaryStats([1], rowsById);
+    expect(result.byType['Epic']).toBe(1);
+    expect(result.byType['Feature']).toBe(2);
+  });
+
+  it('counts byState across ALL items in rowsById', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 10, 50),
+      2: makeRow('Feature', 'Active', 5, 80),
+      3: makeRow('Feature', 'Closed', 3, 100),
+    };
+    const result = computeSummaryStats([1], rowsById);
+    expect(result.byState['Active']).toBe(2);
+    expect(result.byState['Closed']).toBe(1);
+  });
+
+  it('skips missing root ids gracefully', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 10, 50),
+    };
+    // rootId 99 does not exist in rowsById
+    const result = computeSummaryStats([1, 99], rowsById);
+    expect(result.totalEffort).toBe(10);
+    expect(result.overallProgressPct).toBe(50);
+  });
+
+  it('uses only valid root count as divisor for simple average (not rootIds.length)', () => {
+    const rowsById = {
+      1: makeRow('Epic', 'Active', 0, 60),
+    };
+    // rootId 99 missing — simple avg should be 60/1, not 60/2
+    const result = computeSummaryStats([1, 99], rowsById);
+    expect(result.totalEffort).toBe(0);
+    expect(result.overallProgressPct).toBe(60);
+  });
+
+  it('handles single root with 100% progress', () => {
+    const rowsById = {
+      5: makeRow('Epic', 'Closed', 8, 100),
+    };
+    const result = computeSummaryStats([5], rowsById);
+    expect(result.overallProgressPct).toBe(100);
+    expect(result.totalEffort).toBe(8);
+  });
+
+  it('ignores empty type/state strings in byType/byState', () => {
+    const rowsById = {
+      1: makeRow('', 'Active', 5, 50),
+      2: makeRow('Epic', '', 5, 50),
+    };
+    const result = computeSummaryStats([1, 2], rowsById);
+    expect('' in result.byType).toBe(false);
+    expect('' in result.byState).toBe(false);
+    expect(result.byType['Epic']).toBe(1);
+    expect(result.byState['Active']).toBe(1);
+  });
+});

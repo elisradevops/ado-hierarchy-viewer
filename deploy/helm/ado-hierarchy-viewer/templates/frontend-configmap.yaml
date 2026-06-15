@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: {{ .Values.global.namespace }}
+data:
+  BFF_URL: {{ .Values.frontend.config.bffUrl | quote }}

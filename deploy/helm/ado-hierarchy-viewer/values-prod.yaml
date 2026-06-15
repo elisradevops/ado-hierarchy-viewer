@@ -1,0 +1,11 @@
+bff:
+  replicaCount: 3
+  config:
+    logLevel: warn
+frontend:
+  replicaCount: 2
+ingress:
+  host: ado-hierarchy.company.com
+  tls:
+    enabled: true
+    secretName: ado-hierarchy-prod-tls

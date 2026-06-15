@@ -1,0 +1,52 @@
+global:
+  namespace: ado-hierarchy-viewer
+  imageRegistry: ""
+
+bff:
+  image:
+    repository: ado-hierarchy-viewer/bff
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  config:
+    adoApiVersion: "7.1"
+    adoRequestTimeoutMs: "30000"
+    cacheTtlMs: "30000"
+    logLevel: info
+    corsAllowedOrigins: ""
+  secret:
+    bffApiKey: ""   # set in values-prod.yaml via kubectl secret or vault
+
+frontend:
+  image:
+    repository: ado-hierarchy-viewer/frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  config:
+    bffUrl: "https://ado-hierarchy.example.com/api"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ado-hierarchy.example.com
+  tls:
+    enabled: true
+    secretName: ado-hierarchy-tls
+
+hpa:
+  bff:
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  frontend:
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70

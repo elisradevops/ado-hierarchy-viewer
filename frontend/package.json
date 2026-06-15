@@ -1,0 +1,53 @@
+{
+  "name": "ado-hierarchy-viewer-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "prebuild": "node scripts/copy-ado-assets.mjs",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "@mui/material": "^7.3.2",
+    "@mui/icons-material": "^7.3.2",
+    "@emotion/react": "^11",
+    "@emotion/styled": "^11",
+    "axios": "^1.12.1",
+    "zustand": "^5",
+    "react-virtuoso": "^4",
+    "react-cookie": "^8",
+    "js-file-download": "^0.4.12",
+    "core-js": "^3",
+    "regenerator-runtime": "^0.14"
+  },
+  "devDependencies": {
+    "typescript": "^5.9",
+    "vite": "^7",
+    "@vitejs/plugin-react": "^5",
+    "vitest": "^4",
+    "jsdom": "^26",
+    "@testing-library/react": "^16",
+    "@testing-library/jest-dom": "^6",
+    "@testing-library/user-event": "^14",
+    "azure-devops-extension-sdk": "^4.0.0",
+    "requirejs": "^2.3.7",
+    "es6-promise": "^4.2.8",
+    "es6-object-assign": "^1.1.0",
+    "tslib": "^2.8.1",
+    "terser": "^5",
+    "autoprefixer": "^10",
+    "@babel/plugin-transform-runtime": "*",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "@eslint/js": "^9",
+    "typescript-eslint": "^8",
+    "eslint-plugin-react-hooks": "^5",
+    "eslint-plugin-react-refresh": "^0.4"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules
+dist
+ado-extension/dist
+public/lib
+*.vsix
+coverage
+.env

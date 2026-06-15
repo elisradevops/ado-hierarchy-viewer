@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ado-hierarchy-viewer.fullname" . }}-bff
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "ado-hierarchy-viewer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bff
+spec:
+  replicas: {{ .Values.bff.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ado-hierarchy-viewer.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bff
+  template:
+    metadata:
+      labels:
+        {{- include "ado-hierarchy-viewer.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bff
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: bff
+          image: "{{ .Values.bff.image.repository }}:{{ .Values.bff.image.tag }}"
+          imagePullPolicy: {{ .Values.bff.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: bff-config
+            - secretRef:
+                name: bff-secret
+          resources:
+            {{- toYaml .Values.bff.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true

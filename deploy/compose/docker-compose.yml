@@ -1,0 +1,27 @@
+version: '3.9'
+services:
+  bff:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/bff.Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      CORS_ALLOWED_ORIGINS: "http://localhost:4080,http://localhost:5174"
+      ADO_API_VERSION: "7.1"
+      CACHE_TTL_MS: "30000"
+      LOG_LEVEL: "debug"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    ports:
+      - "4080:80"
+    environment:
+      BFF_URL: "http://localhost:8080/api"
+    depends_on:
+      - bff
+    restart: unless-stopped

@@ -1,0 +1,153 @@
+trigger:
+  branches:
+    include:
+      - main
+      - master
+
+pr:
+  branches:
+    include:
+      - main
+      - master
+
+variables:
+  imageTag: $(Build.BuildId)
+  containerRegistry: 'your-acr.azurecr.io'
+
+stages:
+  - stage: BuildAndTest
+    displayName: Build & Test
+    jobs:
+      - job: Frontend
+        displayName: Frontend Build + Test
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '22.x'
+          - script: npm ci
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer
+            displayName: Install workspace deps
+          - script: npm run lint
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer/frontend
+            displayName: Lint
+          - script: npm run build
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer/frontend
+            displayName: Vite build
+          - script: npm test -- --reporter=junit --outputFile=test-results.xml
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer/frontend
+            displayName: Tests
+          - task: PublishTestResults@2
+            inputs:
+              testResultsFiles: '**/test-results.xml'
+              testRunTitle: 'Frontend Tests'
+
+      - job: BFF
+        displayName: BFF Build + Test
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '22.x'
+          - script: npm ci
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer/bff
+            displayName: Install deps
+          - script: npm run build
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer/bff
+            displayName: TypeScript build
+          - script: npm test -- --forceExit
+            workingDirectory: $(System.DefaultWorkingDirectory)/ado-hierarchy-viewer/bff
+            displayName: Tests
+
+  - stage: DockerBuild
+    displayName: Docker Build & Push
+    dependsOn: BuildAndTest
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: DockerImages
+        displayName: Build and push Docker images
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: Docker@2
+            displayName: Build BFF image
+            inputs:
+              command: buildAndPush
+              repository: $(containerRegistry)/ado-hierarchy-viewer/bff
+              dockerfile: ado-hierarchy-viewer/deploy/docker/bff.Dockerfile
+              buildContext: ado-hierarchy-viewer
+              tags: $(imageTag)
+
+          - task: Docker@2
+            displayName: Build frontend image (nginx runtime)
+            inputs:
+              command: buildAndPush
+              repository: $(containerRegistry)/ado-hierarchy-viewer/frontend
+              dockerfile: ado-hierarchy-viewer/deploy/docker/frontend.Dockerfile
+              buildContext: ado-hierarchy-viewer
+              tags: $(imageTag)
+
+  - stage: VSIX
+    displayName: Build VSIX Extension
+    dependsOn: DockerBuild
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: BuildVsix
+        displayName: Package ADO Extension
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '22.x'
+          - script: npm install -g tfx-cli
+            displayName: Install tfx-cli
+          - script: |
+              cd ado-hierarchy-viewer/frontend
+              npm ci
+              npm run build
+              node scripts/copy-ado-assets.mjs
+            displayName: Build frontend assets
+          - script: |
+              cd ado-hierarchy-viewer/frontend/src/deployment
+              chmod +x create-vsix.sh
+              MANIFEST_PATH=../../ado-extension/vss-extension.json
+              ROOT_DIR=../../ado-extension
+              OUT_DIR=../../vsix-out
+              mkdir -p $OUT_DIR
+              ./create-vsix.sh "$MANIFEST_PATH" "$ROOT_DIR" "$OUT_DIR"
+            displayName: Create VSIX
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: ado-hierarchy-viewer/frontend/vsix-out
+              artifactName: vsix
+
+  - stage: Deploy
+    displayName: Deploy to K8s
+    dependsOn: DockerBuild
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployDev
+        displayName: Deploy to Dev
+        environment: ado-hierarchy-dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: HelmDeploy@0
+                  displayName: Helm upgrade
+                  inputs:
+                    command: upgrade
+                    chartType: FilePath
+                    chartPath: $(Pipeline.Workspace)/ado-hierarchy-viewer/deploy/helm/ado-hierarchy-viewer
+                    releaseName: ado-hierarchy-viewer
+                    overrideValues: 'bff.image.tag=$(imageTag),frontend.image.tag=$(imageTag)'
+                    valueFile: ado-hierarchy-viewer/deploy/helm/ado-hierarchy-viewer/values-dev.yaml
+                    install: true
+                    namespace: ado-hierarchy-viewer
+
+                - script: |
+                    curl -f https://ado-hierarchy-dev.example.com/api/health || exit 1
+                  displayName: Smoke test

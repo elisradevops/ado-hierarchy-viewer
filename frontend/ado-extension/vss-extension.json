@@ -1,0 +1,57 @@
+{
+  "manifestVersion": 1,
+  "id": "ado-hierarchy-viewer",
+  "version": "0.0.1",
+  "name": "ADO Backlog Hierarchy Viewer",
+  "publisher": "elisradeveops",
+  "description": "Live, interactive replacement for the PowerShell ADO backlog hierarchy report.",
+  "public": false,
+  "categories": [
+    "Azure Boards"
+  ],
+  "icons": {
+    "default": "dist/logo192.png"
+  },
+  "scopes": [
+    "vso.profile",
+    "vso.project",
+    "vso.work"
+  ],
+  "targets": [
+    {
+      "id": "Microsoft.VisualStudio.Services"
+    }
+  ],
+  "contributions": [
+    {
+      "id": "hierarchy-hub-group",
+      "type": "ms.vss-web.hub-group",
+      "targets": [
+        "ms.vss-web.project-hub-groups-collection"
+      ],
+      "properties": {
+        "name": "Hierarchy Viewer",
+        "order": 120,
+        "icon": "dist/favicon.ico"
+      }
+    },
+    {
+      "id": "hierarchy-hub",
+      "type": "ms.vss-web.hub",
+      "targets": [
+        ".hierarchy-hub-group"
+      ],
+      "properties": {
+        "name": "Backlog Hierarchy",
+        "order": 99,
+        "uri": "dist/index.html"
+      }
+    }
+  ],
+  "files": [
+    {
+      "path": "dist",
+      "addressable": true
+    }
+  ]
+}

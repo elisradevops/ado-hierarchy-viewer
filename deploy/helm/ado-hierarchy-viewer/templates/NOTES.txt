@@ -1,0 +1,6 @@
+ADO Hierarchy Viewer deployed!
+
+Frontend: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+BFF API:  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/api
+
+Health check: curl http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/api/health

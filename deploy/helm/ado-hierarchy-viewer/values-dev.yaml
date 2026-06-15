@@ -1,0 +1,17 @@
+bff:
+  replicaCount: 1
+  config:
+    logLevel: debug
+frontend:
+  replicaCount: 1
+ingress:
+  host: ado-hierarchy-dev.example.com
+  tls:
+    enabled: false
+hpa:
+  bff:
+    minReplicas: 1
+    maxReplicas: 2
+  frontend:
+    minReplicas: 1
+    maxReplicas: 2

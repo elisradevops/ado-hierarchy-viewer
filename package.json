@@ -1,0 +1,9 @@
+{
+  "name": "ado-hierarchy-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["frontend", "bff"],
+  "engines": {
+    "node": ">=22"
+  }
+}
