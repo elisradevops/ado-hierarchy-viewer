@@ -3,7 +3,6 @@ import type { HierarchyConfig, AuthCtx } from '../types';
 import type { WorkItemTypeMeta } from '../state/workItemMetaStore';
 import { httpClient, withRetry, MAX_RETRIES } from './httpClient';
 import { buildAuthHeaders } from './authHeaders';
-import { BATCH_SIZE, buildWiFields } from '../constants/fields';
 import {
   fetchRelationTypesDirect,
   fetchProjectsDirect,
@@ -77,43 +76,6 @@ export async function fetchRelations(
   return response.data.workItemRelations ?? [];
 }
 
-export async function fetchWorkItemsByIds(
-  ids: number[],
-  ctx: AuthCtx,
-  effortField: string,
-  signal?: AbortSignal
-): Promise<WorkItem[]> {
-  if (ids.length === 0) return [];
-
-  const fields = buildWiFields(effortField);
-
-  // Chunk into BATCH_SIZE groups
-  const chunks: number[][] = [];
-  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-    chunks.push(ids.slice(i, i + BATCH_SIZE));
-  }
-
-  const allItems: WorkItem[] = [];
-  // Sequential to avoid overwhelming BFF/ADO (BFF handles its own concurrency)
-  for (const chunk of chunks) {
-    if (signal?.aborted) break;
-    const response = await withRetry(() =>
-      httpClient.post<{ workItems: WorkItem[] }>(
-        '/workitems',
-        { ids: chunk, fields },
-        {
-          headers: buildAuthHeaders(ctx.orgUrl, ctx.credential),
-          signal,
-        }
-      ),
-      MAX_RETRIES,
-      signal
-    );
-    allItems.push(...(response.data.workItems ?? []));
-  }
-
-  return allItems;
-}
 
 export async function fetchWorkItemTypeMeta(
   project: string,

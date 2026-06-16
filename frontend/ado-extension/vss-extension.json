@@ -10,7 +10,7 @@
     "Azure Boards"
   ],
   "icons": {
-    "default": "dist/logo192.png"
+    "default": "dist/favicon.svg"
   },
   "scopes": [
     "vso.profile",
@@ -33,7 +33,7 @@
       "properties": {
         "name": "Hierarchy Viewer",
         "order": 120,
-        "icon": "dist/favicon.ico"
+        "icon": "dist/favicon.svg"
       }
     },
     {

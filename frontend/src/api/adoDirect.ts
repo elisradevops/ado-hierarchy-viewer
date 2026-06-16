@@ -15,7 +15,7 @@ import { withRetry, MAX_RETRIES } from './httpClient';
 import { BATCH_SIZE, buildWiFields } from '../constants/fields';
 
 // ADO Server on-prem api-version fallback chain (7.1 → 6.0 → 5.1 → no version)
-const API_VERSIONS = ['7.1', '6.0', '5.1', ''] as const;
+const API_VERSIONS = ['7.1', '5.1', ''] as const;
 
 function makeAdoHeaders(credential: string): Record<string, string> {
   return { Authorization: credential, 'Content-Type': 'application/json' };
