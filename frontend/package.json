@@ -6,6 +6,7 @@
     "dev": "vite",
     "prebuild": "node scripts/copy-ado-assets.mjs",
     "build": "tsc -b && vite build",
+    "package": "npm run build && tfx extension create --manifest-globs ado-extension/vss-extension.json --root ado-extension --output-path ado-extension/out",
     "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -48,6 +49,7 @@
     "@eslint/js": "^9",
     "typescript-eslint": "^8",
     "eslint-plugin-react-hooks": "^5",
-    "eslint-plugin-react-refresh": "^0.4"
+    "eslint-plugin-react-refresh": "^0.4",
+    "tfx-cli": "^0.16.0"
   }
 }

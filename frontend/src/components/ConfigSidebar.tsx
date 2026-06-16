@@ -170,6 +170,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const credential = useConnectionStore(s => s.credential);
   const status = useConnectionStore(s => s.status);
+  const mode = useConnectionStore(s => s.mode);
   const disconnectStore = useConnectionStore(s => s.disconnect);
 
   // ── Work item type metadata (colors + icons) ──
@@ -197,18 +198,18 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
   useEffect(() => {
     if (status !== 'connected' || !config.teamProject) return;
     let cancelled = false;
-    const ctx: AuthCtx = { orgUrl, credential };
+    const ctx: AuthCtx = { orgUrl, credential, mode };
     fetchWorkItemTypeMeta(config.teamProject, ctx)
       .then(meta => { if (!cancelled) setMeta(meta); })
       .catch(() => { /* non-fatal — hardcoded fallbacks remain active */ });
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential, config.teamProject, setMeta]);
+  }, [status, orgUrl, credential, mode, config.teamProject, setMeta]);
 
   // Load projects + relation types when connected
   useEffect(() => {
     if (status !== 'connected') return;
     let cancelled = false;
-    const ctx: AuthCtx = { orgUrl, credential };
+    const ctx: AuthCtx = { orgUrl, credential, mode };
     setLoadingMeta(true);
 
     Promise.all([
@@ -226,7 +227,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
     }).finally(() => { if (!cancelled) setLoadingMeta(false); });
 
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential]);
+  }, [status, orgUrl, credential, mode]);
 
   const handleDisconnect = (): void => {
     cookies.remove('orgUrl');

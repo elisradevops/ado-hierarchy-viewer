@@ -16,7 +16,7 @@ export function useHierarchyData(): {
   const cancelledRef = useRef(false);
 
   const { setResult, setLoading, setError, loading, error } = useHierarchyStore();
-  const { orgUrl, credential } = useConnectionStore();
+  const { orgUrl, credential, mode } = useConnectionStore();
   const { config } = useConfigStore();
 
   const fetch = useCallback((): void => {
@@ -35,7 +35,7 @@ export function useHierarchyData(): {
     setLoading(true);
     setError(null);
 
-    const ctx: AuthCtx = { orgUrl, credential };
+    const ctx: AuthCtx = { orgUrl, credential, mode };
 
     void (async () => {
       try {
@@ -68,7 +68,7 @@ export function useHierarchyData(): {
         isFetchingRef.current = false;
       }
     })();
-  }, [orgUrl, credential, config, setResult, setLoading, setError]);
+  }, [orgUrl, credential, mode, config, setResult, setLoading, setError]);
 
   return { fetch, loading, error };
 }

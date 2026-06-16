@@ -19,7 +19,8 @@
   ],
   "targets": [
     {
-      "id": "Microsoft.VisualStudio.Services"
+      "id": "Microsoft.TeamFoundation.Server",
+      "version": "[17.0,)"
     }
   ],
   "contributions": [

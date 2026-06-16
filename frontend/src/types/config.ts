@@ -23,4 +23,5 @@ export interface ConnectionState {
 export interface AuthCtx {
   orgUrl: string;
   credential: string;
+  mode: ConnectionMode;
 }

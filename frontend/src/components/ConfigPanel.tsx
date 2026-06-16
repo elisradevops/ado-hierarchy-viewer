@@ -41,7 +41,7 @@ interface ConfigPanelProps {
 
 export function ConfigPanel({ onRun }: ConfigPanelProps): React.ReactElement {
   const { config, setConfig } = useConfigStore();
-  const { orgUrl, credential, status } = useConnectionStore();
+  const { orgUrl, credential, status, mode } = useConnectionStore();
   const lastFetchedAt = useHierarchyStore(s => s.lastFetchedAt);
 
   const [projects, setProjects] = useState<string[]>([]);
@@ -60,7 +60,7 @@ export function ConfigPanel({ onRun }: ConfigPanelProps): React.ReactElement {
   useEffect(() => {
     if (status !== 'connected') return;
     let cancelled = false;
-    const ctx: AuthCtx = { orgUrl, credential };
+    const ctx: AuthCtx = { orgUrl, credential, mode };
     setLoadingMeta(true);
 
     Promise.all([
@@ -78,7 +78,7 @@ export function ConfigPanel({ onRun }: ConfigPanelProps): React.ReactElement {
     }).finally(() => { if (!cancelled) setLoadingMeta(false); });
 
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential]);
+  }, [status, orgUrl, credential, mode]);
 
   const handleRun = (): void => { onRun(); };
 
