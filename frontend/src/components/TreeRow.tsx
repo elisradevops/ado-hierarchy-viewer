@@ -255,8 +255,6 @@ export const TreeRow = React.memo(function TreeRow({
   const cellSx = CELL_SX_MAP[density];
   const effortSx = EFFORT_SX_MAP[density];
 
-  const handleToggle = (): void => { onToggle(node.id); };
-  const handleActivate = (): void => { onActivate(node.id); };
 
   const workItemUrl = buildWorkItemUrl(orgUrl, teamProject, node.id);
 
@@ -269,11 +267,15 @@ export const TreeRow = React.memo(function TreeRow({
     }),
   }), [depth]);
 
+  // L3: fold isRef variant into rowSx so finalRowSx spread is avoided each render
   const rowSx = useMemo(
-    () => isActive
-      ? { ...ROW_ACTIVE_SX, gridTemplateColumns: gridCols }
-      : { ...ROW_INACTIVE_SX, gridTemplateColumns: gridCols },
-    [isActive, gridCols]
+    () => {
+      const base = isActive
+        ? { ...ROW_ACTIVE_SX, gridTemplateColumns: gridCols }
+        : { ...ROW_INACTIVE_SX, gridTemplateColumns: gridCols };
+      return node.isRef ? { ...base, ...REF_ROW_SX } : base;
+    },
+    [isActive, gridCols, node.isRef]
   );
 
   // Link-rel chip: show when linkRel is present and NOT the primary hierarchy
@@ -281,10 +283,8 @@ export const TreeRow = React.memo(function TreeRow({
   const relColor = node.linkRel ? relFamilyColor(node.linkRel) : '';
   const relLabel = node.linkRel ? relDisplayName(node.linkRel) : '';
 
-  const finalRowSx = node.isRef ? { ...rowSx, ...REF_ROW_SX } : rowSx;
-
   return (
-    <Box tabIndex={0} onClick={handleActivate} sx={finalRowSx}>
+    <Box tabIndex={0} onClick={() => onActivate(node.id)} sx={rowSx}>
       {visibleColumns.map(col => {
         switch (col.key) {
           case 'title':
@@ -294,8 +294,8 @@ export const TreeRow = React.memo(function TreeRow({
                   <Box sx={indentSx} />
                   {hasChildren && !node.isRef ? (
                     isExpanded
-                      ? <ExpandMoreIcon sx={CHEVRON_SX} onClick={(e) => { e.stopPropagation(); handleToggle(); }} />
-                      : <ChevronRightIcon sx={CHEVRON_SX} onClick={(e) => { e.stopPropagation(); handleToggle(); }} />
+                      ? <ExpandMoreIcon sx={CHEVRON_SX} onClick={(e) => { e.stopPropagation(); onToggle(node.id); }} />
+                      : <ChevronRightIcon sx={CHEVRON_SX} onClick={(e) => { e.stopPropagation(); onToggle(node.id); }} />
                   ) : (
                     <Box sx={{ ...SPACER_SX, width: 18 }} />
                   )}

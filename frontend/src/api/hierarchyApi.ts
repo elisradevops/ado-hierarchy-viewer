@@ -157,5 +157,5 @@ export async function fetchHierarchy(
     MAX_RETRIES,
     signal
   );
-  return response.data;
+  return response.data ?? { workItemRelations: [], workItems: [] };
 }

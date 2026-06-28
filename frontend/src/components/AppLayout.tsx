@@ -26,10 +26,10 @@ interface AppLayoutProps {
 export function AppLayout({ children, onRun }: AppLayoutProps): React.ReactElement {
   return (
     <Box sx={ROOT_SX}>
-      <ConfigSidebar onRun={onRun} />
       <Box sx={MAIN_SX}>
         {children}
       </Box>
+      <ConfigSidebar onRun={onRun} />
     </Box>
   );
 }

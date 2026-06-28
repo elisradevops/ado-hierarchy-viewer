@@ -83,7 +83,6 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
   const { sort, filter, setSort, density, hiddenCols, colWidths, setColWidth } = useUiPrefsStore();
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const teamProject = useConfigStore(s => s.config.teamProject);
-  const effortField = useConfigStore(s => s.config.effortField);
   const apiTypeColors = useWorkItemMetaStore(s => s.typeColors);
   const rawApiTypeIconUrls = useWorkItemMetaStore(s => s.typeIconUrls);
   const fieldsByType = useWorkItemMetaStore(s => s.fieldsByType);
@@ -99,9 +98,17 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
     return { ...fallbacks, ...rawApiTypeIconUrls };
   }, [orgUrl, rawApiTypeIconUrls]);
 
+  // P2: derive a stable string key from present types so visibleColumns does not
+  // recompute on every re-fetch when the WIT type set has not changed.
+  // P3: effortField removed — it was a dead dep (never read in the factory body).
+  const presentTypesKey = useMemo(
+    () => [...new Set(Object.values(rowsById).map(n => n.type))].sort().join(','),
+    [rowsById]
+  );
+
   const visibleColumns = useMemo((): ColumnDef[] => {
-    // Collect present WIT types from rowsById
-    const presentTypes = new Set<string>(Object.values(rowsById).map(n => n.type));
+    // Collect present WIT types from the stable key
+    const presentTypes = new Set<string>(presentTypesKey ? presentTypesKey.split(',') : []);
     // Union of all supported fields across present types
     const supportedFields = new Set<string>();
     if (Object.keys(fieldsByType).length > 0) {
@@ -117,10 +124,12 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
       if (Object.keys(fieldsByType).length === 0) return true; // meta not loaded — show all (fallback)
       return supportedFields.has(col.field);
     });
-  }, [rowsById, fieldsByType, effortField, hiddenCols]);
+  }, [presentTypesKey, fieldsByType, hiddenCols]);
 
   const gridCols = useMemo(() => buildGridCols(visibleColumns, colWidths), [visibleColumns, colWidths]);
   const minTableWidth = useMemo(() => buildMinTableWidth(visibleColumns, 200, colWidths), [visibleColumns, colWidths]);
+  // P4: stable sx object — avoids new object on every render
+  const scrollInnerSx = useMemo(() => ({ ...SCROLL_INNER_SX, minWidth: minTableWidth }), [minTableWidth]);
 
   const headerRowSx = useMemo(
     () => ({ ...HEADER_ROW_BASE_SX, gridTemplateColumns: gridCols }),
@@ -128,6 +137,10 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
   );
 
   const [activeId, setActiveId] = useState<number | null>(null);
+  // P1: ref mirrors activeId so renderRow does not need it as a dep — prevents
+  // full virtual list re-render on every row click.
+  const activeIdRef = useRef<number | null>(null);
+  activeIdRef.current = activeId;
 
   const roots = useMemo(
     () => rootIds.map(id => rowsById[id]).filter(Boolean),
@@ -189,6 +202,24 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
     EmptyPlaceholder: VirtuosoEmptyPlaceholder,
   }), []);
 
+  // M9+P1: stable itemContent — activeIdRef.current read at render time, not captured in closure,
+  // so row activation does not invalidate the renderer and re-render all visible rows.
+  const renderRow = useCallback((_idx: number, row: FlatRow) => (
+    <TreeRow
+      row={row}
+      orgUrl={orgUrl}
+      teamProject={teamProject}
+      isActive={row.node.id === activeIdRef.current}
+      density={density}
+      onToggle={handleToggle}
+      onActivate={handleActivate}
+      apiTypeColors={apiTypeColors}
+      apiTypeIconUrls={apiTypeIconUrls}
+      visibleColumns={visibleColumns}
+      gridCols={gridCols}
+    />
+  ), [orgUrl, teamProject, density, handleToggle, handleActivate, apiTypeColors, apiTypeIconUrls, visibleColumns, gridCols]);
+
   return (
     <Paper sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <HierarchyToolbar
@@ -201,7 +232,7 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
 
       {/* Horizontal scroll zone — toolbar stays fixed above, header+body scroll together */}
       <Box sx={SCROLL_OUTER_SX}>
-        <Box sx={{ ...SCROLL_INNER_SX, minWidth: minTableWidth }}>
+        <Box sx={scrollInnerSx}>
           {/* Grid header */}
           <Box sx={headerRowSx}>
             {visibleColumns.map(col => (
@@ -234,21 +265,7 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
           <Box sx={BODY_WRAPPER_SX} onKeyDown={onKeyDown}>
             <Virtuoso
               data={visibleRows}
-              itemContent={(_idx, row) => (
-                <TreeRow
-                  row={row}
-                  orgUrl={orgUrl}
-                  teamProject={teamProject}
-                  isActive={row.node.id === activeId}
-                  density={density}
-                  onToggle={handleToggle}
-                  onActivate={handleActivate}
-                  apiTypeColors={apiTypeColors}
-                  apiTypeIconUrls={apiTypeIconUrls}
-                  visibleColumns={visibleColumns}
-                  gridCols={gridCols}
-                />
-              )}
+              itemContent={renderRow}
               components={virtuosoComponents}
               context={{ hasFilter }}
               style={VIRTUOSO_SCROLLER_STYLE}

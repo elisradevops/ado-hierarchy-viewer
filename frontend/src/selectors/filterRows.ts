@@ -36,7 +36,9 @@ export function filterRows(rows: FlatRow[], criteria: FilterCriteria): FlatRow[]
 
   // Build depth-ordered rows — retain ancestors of matching rows
   // Walk the flat list and include a row if: it matches OR it is an ancestor of a match
-  const rowsByIdMap = new Map(rows.map(r => [r.node.id, r]));
+  // L4: single-pass O(n) construction instead of map+new-Map (saves N tuple allocations)
+  const rowsByIdMap = new Map<number, FlatRow>();
+  for (const r of rows) rowsByIdMap.set(r.node.id, r);
   const result: FlatRow[] = [];
   const includedIds = new Set<number>();
   const ancestorStack: Array<{ id: number; depth: number }> = [];

@@ -12,9 +12,10 @@ export function runHierarchyPipeline(
 ): Promise<BuildHierarchyResult> {
   const totalItems = input.items.length;
 
-  // Below threshold or no Worker support: run synchronously
+  // Below threshold or no Worker support: defer to microtask so the call
+  // does not block the main thread synchronously before the promise resolves.
   if (totalItems <= WORKER_THRESHOLD || typeof Worker === 'undefined') {
-    return Promise.resolve(buildHierarchy(input));
+    return Promise.resolve().then(() => buildHierarchy(input));
   }
 
   return new Promise((resolve, reject) => {
@@ -41,6 +42,11 @@ export function runHierarchyPipeline(
     worker.onerror = (err) => {
       cleanup();
       reject(new Error(err.message || 'Worker error'));
+    };
+
+    worker.onmessageerror = () => {
+      cleanup();
+      reject(new Error('Worker message deserialization failed'));
     };
 
     worker.postMessage(input);

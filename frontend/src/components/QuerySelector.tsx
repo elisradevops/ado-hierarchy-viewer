@@ -10,7 +10,8 @@ import FolderIcon from '@mui/icons-material/Folder';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import { fetchQueries } from '../api/hierarchyApi';
-import type { QueryTreeNode } from '../types';
+import { fetchQueriesDirect } from '../api/adoDirect';
+import type { QueryTreeNode, ConnectionMode } from '../types';
 import type { AuthCtx } from '../types';
 
 interface QuerySelectorProps {
@@ -18,6 +19,7 @@ interface QuerySelectorProps {
   orgUrl: string;
   teamProject: string;
   credential: string;
+  mode: ConnectionMode;
   selectedId: string;
   onSelect: (id: string, name: string) => void;
   onClose: () => void;
@@ -84,6 +86,7 @@ export function QuerySelector({
   orgUrl,
   teamProject,
   credential,
+  mode,
   selectedId,
   onSelect,
   onClose,
@@ -99,10 +102,14 @@ export function QuerySelector({
     setSearch('');
     setLoading(true);
     setError(null);
+    let cancelled = false; // N3: stale-response guard for rapid open/close or project change
     const ctx: AuthCtx = { orgUrl, credential };
-    fetchQueries(teamProject, ctx)
-      .then(data => { setRoots(data); })
+    (mode === 'extension'
+      ? fetchQueriesDirect(orgUrl, credential, teamProject)
+      : fetchQueries(teamProject, ctx))
+      .then(data => { if (!cancelled) setRoots(data); })
       .catch((err: unknown) => {
+        if (cancelled) return;
         const status = (err as { response?: { status?: number } }).response?.status;
         if (status === 401 || status === 403) {
           setError('Authentication failed. Check your PAT and project access.');
@@ -112,8 +119,9 @@ export function QuerySelector({
           setError('Failed to load queries. Check project name and permissions.');
         }
       })
-      .finally(() => setLoading(false));
-  }, [open, orgUrl, credential, teamProject]);
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, orgUrl, credential, teamProject, mode]);
 
   const filteredRoots = useMemo(
     () => search.trim() ? filterTree(roots, search.trim()) : roots,
@@ -139,16 +147,19 @@ export function QuerySelector({
     if (node && !node.isFolder) setPendingId(itemId);
   }, [roots]);
 
+  // M11: memoize so findNode O(n) tree walk only runs when roots or pendingId changes
+  const pendingNode = useMemo(
+    () => roots.length > 0 ? findNode(roots, pendingId) : null,
+    [roots, pendingId]
+  );
+  const canConfirm = !!pendingNode && !pendingNode.isFolder;
+
   const handleConfirm = (): void => {
-    const node = findNode(roots, pendingId);
-    if (node && !node.isFolder) {
-      onSelect(node.id, node.name);
+    if (pendingNode && !pendingNode.isFolder) {
+      onSelect(pendingNode.id, pendingNode.name);
       onClose();
     }
   };
-
-  const pendingNode = roots.length > 0 ? findNode(roots, pendingId) : null;
-  const canConfirm = !!pendingNode && !pendingNode.isFolder;
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>

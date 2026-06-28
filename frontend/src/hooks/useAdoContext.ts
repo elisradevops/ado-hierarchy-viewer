@@ -31,6 +31,10 @@ export function useAdoContext(): UseAdoContextResult {
           if (ctx.project) {
             setConfig({ teamProject: ctx.project });
           }
+        } else if (ctx.isAdo && !ctx.accessToken) {
+          // ADO host detected but token acquisition failed — surface explicitly.
+          // Without this, the UI appears connected but every request silently fails.
+          setError('Could not acquire ADO token — try reloading the page.');
         }
         setSdk(ctx.sdk ?? null);
         setReady(true);

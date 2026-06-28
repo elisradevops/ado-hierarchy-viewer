@@ -1,55 +1,35 @@
 /**
- * Direct Azure DevOps REST calls for extension mode.
- * Used when AuthCtx.mode === 'extension' — no BFF proxy.
+ * Direct Azure DevOps REST calls for extension mode using azure-devops-extension-api.
+ * getClient() is CORS-safe: requests go through the SDK's XDM/iframe channel.
  *
- * Logic ported verbatim from:
- *   bff/src/services/HierarchyService.ts
- *   bff/src/controllers/MetadataController.ts
+ * Used when mode === 'extension'. Standalone mode routes to the BFF (hierarchyApi.ts).
+ *
+ * orgUrl/credential params are accepted but unused — the SDK owns org + auth internally.
+ * Keeping them preserves call-site signatures without churn.
  */
 
-import axios from 'axios';
-import type { WorkItemRelation, WorkItem, RelationType } from '../types';
+import { getClient } from 'azure-devops-extension-api';
+import { CoreRestClient } from 'azure-devops-extension-api/Core';
+import {
+  WorkItemTrackingRestClient,
+  QueryExpand,
+  QueryType,
+  WorkItemErrorPolicy,
+  WorkItemBatchGetRequest,
+} from 'azure-devops-extension-api/WorkItemTracking';
+
+import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode } from '../types';
 import type { HierarchyConfig } from '../types';
 import type { WorkItemTypeMeta } from '../state/workItemMetaStore';
-import { withRetry, MAX_RETRIES } from './httpClient';
-import { BATCH_SIZE, buildWiFields } from '../constants/fields';
+import { BATCH_SIZE, buildWiFields, DEFAULT_EFFORT_FIELD } from '../constants/fields';
 
-// ADO Server on-prem api-version fallback chain (7.1 → 6.0 → 5.1 → no version)
-const API_VERSIONS = ['7.1', '5.1', ''] as const;
+// ─── Auth error broadcast ──────────────────────────────────────────────────
 
-function makeAdoHeaders(credential: string): Record<string, string> {
-  return { Authorization: credential, 'Content-Type': 'application/json' };
-}
-
-function normalizeUrl(orgUrl: string): string {
-  return orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
-}
-
-// Retry across api-versions on 400/404/405; bail immediately on 401/403.
-// Matches BFF's withApiVersionFallback (HierarchyService.ts:11-29).
-async function withApiVersionFallback<T>(
-  buildRequest: (apiVersion: string) => Promise<T>
-): Promise<T> {
-  let lastError: unknown;
-  for (const version of API_VERSIONS) {
-    try {
-      return await buildRequest(version);
-    } catch (err) {
-      lastError = err;
-      const status = (err as { response?: { status?: number } }).response?.status;
-      if (status === 401 || status === 403) throw err;
-      if (status && status < 400) throw err;
-    }
-  }
-  throw lastError;
-}
-
-// Surface 401 as auth event (mirrors httpClient.ts interceptor for the BFF path).
 function handleAdoError(err: unknown): never {
-  if (axios.isAxiosError(err) && err.response?.status === 401) {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('auth-unauthorized'));
-    }
+  const status = (err as { status?: number; statusCode?: number }).status
+    ?? (err as { status?: number; statusCode?: number }).statusCode;
+  if (status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('auth-unauthorized'));
   }
   throw err;
 }
@@ -57,25 +37,18 @@ function handleAdoError(err: unknown): never {
 // ─── Relation types ────────────────────────────────────────────────────────
 
 export async function fetchRelationTypesDirect(
-  orgUrl: string,
-  credential: string,
+  _orgUrl: string,
+  _credential: string,
   signal?: AbortSignal
 ): Promise<RelationType[]> {
-  const url = `${normalizeUrl(orgUrl)}_apis/wit/workitemrelationtypes`;
-  const headers = makeAdoHeaders(credential);
+  if (signal?.aborted) return [];
   try {
-    const result = await withRetry(
-      () => withApiVersionFallback(apiVersion =>
-        axios.get<{ value: RelationType[] }>(url, {
-          headers,
-          signal,
-          params: apiVersion ? { 'api-version': apiVersion } : {},
-        }).then(r => r.data)
-      ),
-      MAX_RETRIES,
-      signal
-    );
-    return result.value ?? [];
+    const client = getClient(WorkItemTrackingRestClient);
+    const all = await client.getRelationTypes();
+    // Gap #1: filter to work-item-to-work-item link types only (matches BFF MetadataController)
+    return (all ?? []).filter(
+      rt => rt.attributes?.['usage'] === 'workItemLink'
+    ) as unknown as RelationType[];
   } catch (err) {
     return handleAdoError(err);
   }
@@ -84,87 +57,64 @@ export async function fetchRelationTypesDirect(
 // ─── Projects ──────────────────────────────────────────────────────────────
 
 export async function fetchProjectsDirect(
-  orgUrl: string,
-  credential: string,
+  _orgUrl: string,
+  _credential: string,
   signal?: AbortSignal
 ): Promise<Array<{ id: string; name: string }>> {
-  const url = `${normalizeUrl(orgUrl)}_apis/projects`;
-  const headers = makeAdoHeaders(credential);
+  if (signal?.aborted) return [];
   try {
-    const result = await withRetry(
-      () => withApiVersionFallback(apiVersion =>
-        axios.get<{ value: Array<{ id: string; name: string }> }>(url, {
-          headers,
-          signal,
-          params: apiVersion ? { 'api-version': apiVersion } : {},
-        }).then(r => r.data)
-      ),
-      MAX_RETRIES,
-      signal
-    );
-    return result.value ?? [];
+    const client = getClient(CoreRestClient);
+    const projects = await client.getProjects();
+    return (projects ?? []).map(p => ({ id: p.id ?? '', name: p.name ?? '' }));
   } catch (err) {
     return handleAdoError(err);
   }
 }
 
 // ─── Work item type metadata ───────────────────────────────────────────────
-// Ported from MetadataController.ts:61-116
 
 export async function fetchWorkItemTypeMetaDirect(
-  orgUrl: string,
-  credential: string,
+  _orgUrl: string,
+  _credential: string,
   project: string,
   signal?: AbortSignal
 ): Promise<WorkItemTypeMeta> {
-  const baseUrl = `${normalizeUrl(orgUrl)}${encodeURIComponent(project)}/_apis/wit`;
-  const headers = makeAdoHeaders(credential);
-
-  type WitTypeEntry = { name: string; color: string; icon?: { id: string; url: string } };
-  type WitStateEntry = { name: string; color: string; category: string };
-
+  if (signal?.aborted) return { types: [], stateColors: {}, fieldsByType: {} };
   try {
-    const typesData = await withRetry(
-      () => withApiVersionFallback(apiVersion =>
-        axios.get<{ value: WitTypeEntry[] }>(`${baseUrl}/workitemtypes`, {
-          headers,
-          signal,
-          params: apiVersion ? { 'api-version': apiVersion } : {},
-        }).then(r => r.data)
-      ),
-      MAX_RETRIES,
-      signal
-    );
+    const client = getClient(WorkItemTrackingRestClient);
+    const witTypes = await client.getWorkItemTypes(project);
 
-    const types = typesData.value ?? [];
     const stateColors: Record<string, string> = {};
-    const CHUNK = 6;
+    const fieldsByType: Record<string, string[]> = {};
 
-    for (let i = 0; i < types.length; i += CHUNK) {
+    for (const t of witTypes ?? []) {
       if (signal?.aborted) break;
-      await Promise.all(types.slice(i, i + CHUNK).map(async (t) => {
-        try {
-          const statesData = await withApiVersionFallback(apiVersion =>
-            axios.get<{ value: WitStateEntry[] }>(
-              `${baseUrl}/workitemtypes/${encodeURIComponent(t.name)}/states`,
-              { headers, signal, params: apiVersion ? { 'api-version': apiVersion } : {} }
-            ).then(r => r.data)
-          );
-          for (const s of statesData.value ?? []) {
-            const k = s.name.toLowerCase();
-            if (!stateColors[k] && s.color) stateColors[k] = `#${s.color}`;
-          }
-        } catch (stateErr) { console.warn('fetchWorkItemTypeMetaDirect: state fetch failed for', t.name, stateErr); }
-      }));
+
+      // State colors — WorkItemType.states populated by getWorkItemTypes
+      for (const s of t.states ?? []) {
+        const k = s.name?.toLowerCase() ?? '';
+        if (k && !stateColors[k] && s.color) {
+          stateColors[k] = s.color.startsWith('#') ? s.color : `#${s.color}`;
+        }
+      }
+
+      // Gap #2: fieldsByType from WorkItemType.fields / fieldInstances
+      const refs = (t.fields ?? t.fieldInstances ?? []).map(
+        (f: { referenceName?: string }) => f.referenceName ?? ''
+      ).filter(Boolean);
+      if (refs.length > 0) {
+        fieldsByType[t.name] = refs;
+      }
     }
 
     return {
-      types: types.map(t => ({
+      types: (witTypes ?? []).map(t => ({
         name: t.name,
-        color: `#${t.color}`,
+        color: t.color ? (t.color.startsWith('#') ? t.color : `#${t.color}`) : '',
         iconUrl: t.icon?.url ?? '',
       })),
       stateColors,
+      fieldsByType,
     };
   } catch (err) {
     return handleAdoError(err);
@@ -172,64 +122,36 @@ export async function fetchWorkItemTypeMetaDirect(
 }
 
 // ─── WIQL links query ──────────────────────────────────────────────────────
-// Ported from HierarchyService.ts:47-83
 
 export async function fetchRelationsDirect(
-  orgUrl: string,
-  credential: string,
+  _orgUrl: string,
+  _credential: string,
   project: string,
   relationTypes: string[],
   signal?: AbortSignal
 ): Promise<WorkItemRelation[]> {
-  const url = `${normalizeUrl(orgUrl)}${encodeURIComponent(project)}/_apis/wit/wiql`;
-  const headers = makeAdoHeaders(credential);
-  const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
-  const wiqlQuery = {
-    query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause}) MODE (MustContain)`,
-  };
-
+  if (signal?.aborted || relationTypes.length === 0) return [];
   try {
-    const result = await withRetry(
-      () => withApiVersionFallback(apiVersion =>
-        axios.post<{ workItemRelations: WorkItemRelation[] }>(url, wiqlQuery, {
-          headers,
-          signal,
-          params: apiVersion ? { 'api-version': apiVersion } : {},
-        }).then(r => r.data)
-      ),
-      MAX_RETRIES,
-      signal
-    );
+    const client = getClient(WorkItemTrackingRestClient);
+    const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
+    const wiql = {
+      query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause}) MODE (MustContain)`,
+    };
+    const result = await client.queryByWiql(wiql, project);
 
-    // Filter null/non-integer pairs — mirrors HierarchyService.ts:75-79
-    return (result.workItemRelations ?? []).filter(r => {
-      if (!r.source || !r.target) return false;
-      if (!Number.isInteger(r.source.id) || !Number.isInteger(r.target.id)) return false;
-      return true;
-    });
+    return (result.workItemRelations ?? [])
+      .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+      .map(r => ({
+        rel: r.rel ?? null,
+        source: r.source ? { id: r.source.id } : null,
+        target: r.target ? { id: r.target.id } : null,
+      })) as WorkItemRelation[];
   } catch (err) {
     return handleAdoError(err);
   }
 }
 
 // ─── Batch work item fetch ─────────────────────────────────────────────────
-// Ported from HierarchyService.ts:85-157
-
-const KNOWN_FIELDS = new Set([
-  'System.Id',
-  'System.WorkItemType',
-  'System.Title',
-  'System.State',
-  'System.TeamProject',
-  'System.AssignedTo',
-  'System.AreaPath',
-  'System.IterationPath',
-  'System.Tags',
-  'Microsoft.VSTS.Common.Priority',
-  'Microsoft.VSTS.Scheduling.StoryPoints',
-  'Microsoft.VSTS.Scheduling.RemainingWork',
-  'Microsoft.VSTS.Scheduling.OriginalEstimate',
-]);
 
 const numOrNull = (f: Record<string, unknown>, key: string): number | null => {
   const v = f[key];
@@ -245,8 +167,6 @@ const strOrUndef = (f: Record<string, unknown>, key: string): string | undefined
 };
 
 async function fetchWorkItemsBatchDirect(
-  orgUrl: string,
-  credential: string,
   project: string,
   ids: number[],
   fields: string[],
@@ -255,38 +175,26 @@ async function fetchWorkItemsBatchDirect(
 ): Promise<WorkItem[]> {
   if (ids.length === 0) return [];
 
-  const batchUrl = `${normalizeUrl(orgUrl)}${encodeURIComponent(project)}/_apis/wit/workitemsbatch`;
-  const headers = makeAdoHeaders(credential);
-
-  type RawItem = { id: number; fields: Record<string, unknown>; url?: string };
+  const client = getClient(WorkItemTrackingRestClient);
+  const allItems: WorkItem[] = [];
 
   const chunks: number[][] = [];
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     chunks.push(ids.slice(i, i + BATCH_SIZE));
   }
 
-  const allItems: WorkItem[] = [];
   for (const chunk of chunks) {
     if (signal?.aborted) break;
-    const result = await withRetry(
-      () => withApiVersionFallback(apiVersion =>
-        axios.post<{ value: RawItem[] }>(
-          batchUrl,
-          { ids: chunk, fields, errorPolicy: 'Omit' },
-          { headers, signal, params: apiVersion ? { 'api-version': apiVersion } : {} }
-        ).then(r => r.data)
-      ),
-      MAX_RETRIES,
-      signal
-    );
+    const req = { ids: chunk, fields, errorPolicy: WorkItemErrorPolicy.Omit } as WorkItemBatchGetRequest;
+    const raw = await client.getWorkItemsBatch(req, project);
 
-    const items = (result.value ?? []).map((raw): WorkItem => {
-      const f = raw.fields;
-      const resolvedEffortField = effortField ?? fields.find(fn => !KNOWN_FIELDS.has(fn)) ?? null;
-      const effortRaw = resolvedEffortField != null ? f[resolvedEffortField] : undefined;
+    const mapped = (raw ?? []).map((wi): WorkItem => {
+      const f = (wi.fields ?? {}) as Record<string, unknown>;
+      const resolvedEffort = effortField ?? DEFAULT_EFFORT_FIELD;
+      const effortRaw = f[resolvedEffort];
       const effort = typeof effortRaw === 'number' && Number.isFinite(effortRaw) ? effortRaw : null;
       return {
-        id: raw.id,
+        id: wi.id ?? 0,
         type: String(f['System.WorkItemType'] ?? ''),
         title: String(f['System.Title'] ?? ''),
         state: String(f['System.State'] ?? ''),
@@ -300,10 +208,11 @@ async function fetchWorkItemsBatchDirect(
         storyPoints: numOrNull(f, 'Microsoft.VSTS.Scheduling.StoryPoints'),
         remainingWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.RemainingWork'),
         originalEstimate: numOrNull(f, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
-        url: raw.url,
+        completedWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.CompletedWork'),
+        url: wi.url,
       };
     });
-    allItems.push(...items);
+    allItems.push(...mapped);
   }
   return allItems;
 }
@@ -311,36 +220,22 @@ async function fetchWorkItemsBatchDirect(
 // ─── Query root IDs fetch ──────────────────────────────────────────────────
 
 export async function fetchQueryRootIdsDirect(
-  orgUrl: string,
-  credential: string,
+  _orgUrl: string,
+  _credential: string,
   project: string,
   queryId: string,
   signal?: AbortSignal
 ): Promise<number[]> {
-  const url = `${normalizeUrl(orgUrl)}${encodeURIComponent(project)}/_apis/wit/wiql/${encodeURIComponent(queryId)}`;
-  const headers = makeAdoHeaders(credential);
-
+  if (signal?.aborted) return [];
   try {
-    const result = await withRetry(
-      () => withApiVersionFallback(apiVersion =>
-        axios.get<{
-          queryType: string;
-          workItems?: Array<{ id: number }>;
-          workItemRelations?: Array<{ source: { id: number } | null; target: { id: number } | null }>;
-        }>(url, {
-          headers,
-          signal,
-          params: apiVersion ? { 'api-version': apiVersion } : {},
-        }).then(r => r.data)
-      ),
-      MAX_RETRIES,
-      signal
-    );
+    const client = getClient(WorkItemTrackingRestClient);
+    const result = await client.queryById(queryId, project);
 
     let rootIds: number[] = [];
-    if (result.queryType === 'flat' && Array.isArray(result.workItems)) {
+    // N1: compare against QueryType enum — SDK returns numeric (QueryType.Flat = 1)
+    if (result.queryType === QueryType.Flat && Array.isArray(result.workItems)) {
       rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
-    } else if (result.queryType === 'tree' && Array.isArray(result.workItemRelations)) {
+    } else if (Array.isArray(result.workItemRelations)) {
       const childIds = new Set(
         result.workItemRelations
           .filter(r => r.target && Number.isInteger(r.target.id))
@@ -358,30 +253,65 @@ export async function fetchQueryRootIdsDirect(
   }
 }
 
+// ─── Query tree fetch ──────────────────────────────────────────────────────
+
+type SdkQueryItem = {
+  id: string; name: string; path?: string;
+  isFolder?: boolean; hasChildren?: boolean; queryType?: unknown;
+  children?: SdkQueryItem[];
+};
+
+function mapQueryItem(item: SdkQueryItem): QueryTreeNode {
+  return {
+    id: item.id,
+    name: item.name,
+    path: item.path ?? '',
+    isFolder: item.isFolder ?? false,
+    hasChildren: item.hasChildren ?? false,
+    queryType: item.isFolder ? undefined : (item.queryType as QueryTreeNode['queryType']),
+    children: item.children ? item.children.map(mapQueryItem) : undefined,
+  };
+}
+
+export async function fetchQueriesDirect(
+  _orgUrl: string,
+  _credential: string,
+  project: string,
+  signal?: AbortSignal
+): Promise<QueryTreeNode[]> {
+  if (signal?.aborted) return [];
+  try {
+    const client = getClient(WorkItemTrackingRestClient);
+    const items = await client.getQueries(project, QueryExpand.All, 2);
+    return (items ?? []).map(item => mapQueryItem(item as unknown as SdkQueryItem));
+  } catch (err) {
+    return handleAdoError(err);
+  }
+}
+
 // ─── Composite hierarchy fetch ─────────────────────────────────────────────
-// Mirrors HierarchyController.ts:77-101 (links → dedupe ids → batch items)
 
 export async function fetchHierarchyDirect(
   config: HierarchyConfig,
-  orgUrl: string,
-  credential: string,
+  _orgUrl: string,
+  _credential: string,
   signal?: AbortSignal
 ): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[] }> {
-  // Fetch query root IDs if queryId provided
   let rootIds: number[] | undefined;
   if (config.queryId) {
-    rootIds = await fetchQueryRootIdsDirect(orgUrl, credential, config.teamProject, config.queryId, signal);
+    rootIds = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
   }
 
-  const relations = await fetchRelationsDirect(
-    orgUrl,
-    credential,
-    config.teamProject,
-    config.relationTypes,
-    signal
-  );
+  // N4: abort checks between sequential awaits to skip unnecessary batch fetches after cancel
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds };
 
-  // Dedupe all source + target IDs, union with rootIds
+  // Gap #3: skip WIQL when no relation types to avoid empty IN () → ADO 400
+  const relations = config.relationTypes.length > 0
+    ? await fetchRelationsDirect('', '', config.teamProject, config.relationTypes, signal)
+    : [];
+
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds };
+
   const idSet = new Set<number>();
   for (const r of relations) {
     if (r.source) idSet.add(r.source.id);
@@ -391,14 +321,18 @@ export async function fetchHierarchyDirect(
     for (const id of rootIds) idSet.add(id);
   }
 
-  const fields = buildWiFields(config.effortField);
+  // Gap #4: DEFAULT_EFFORT_FIELD fallback when effortField not configured
+  const effortField = config.effortField ?? DEFAULT_EFFORT_FIELD;
+  // Gap #5: include CompletedWork (missing from original adoDirect)
+  const baseFields = buildWiFields(effortField);
+  const completedWork = 'Microsoft.VSTS.Scheduling.CompletedWork';
+  const fields = baseFields.includes(completedWork) ? baseFields : [...baseFields, completedWork];
+
   const workItems = await fetchWorkItemsBatchDirect(
-    orgUrl,
-    credential,
     config.teamProject,
     [...idSet],
     fields,
-    config.effortField,
+    effortField,
     signal
   );
 

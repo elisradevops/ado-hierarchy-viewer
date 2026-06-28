@@ -1,18 +1,20 @@
 /**
  * ADO Extension SDK loader and context initializer.
- * Ported from docgen-frontend/src/adoSdk.js — TypeScript edition.
+ * Uses azure-devops-extension-sdk as an ES import (Vite-bundled) so that
+ * getClient() from azure-devops-extension-api shares the same initialized instance.
  */
+
+import * as SDK from 'azure-devops-extension-sdk';
 
 export interface AdoContext {
   isAdo: boolean;
-  sdk: unknown | null;
+  sdk: typeof SDK | null;
   project: string;
   collectionUri: string;
   accessToken: string;
 }
 
-// Module-level promise singletons — ensure SDK is only loaded/initialized once.
-let sdkPromise: Promise<unknown | null> | null = null;
+// Module-level promise singleton — ensure SDK is only initialized once.
 let initPromise: Promise<AdoContext> | null = null;
 
 const hasAnySearchParam = (params: URLSearchParams, names: string[]): boolean =>
@@ -55,45 +57,6 @@ const hasAdoHostSignals = (): boolean => {
   }
 
   return false;
-};
-
-const getRequireJs = (): typeof require | null => {
-  if (typeof window === 'undefined') return null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = window as any;
-  return w.requirejs ?? w.require ?? null;
-};
-
-const configureRequireJs = (): typeof require | null => {
-  const req = getRequireJs();
-  if (!req) return null;
-  try {
-    const baseUrl = new URL('.', window.location.href).toString();
-    req.config({
-      baseUrl,
-      paths: {
-        VSS: 'lib',
-        XDM: 'lib/XDM',
-        tslib: 'lib/tslib',
-      },
-    });
-  } catch {
-    /* ignore config errors */
-  }
-  return req;
-};
-
-export const loadAdoSdk = async (): Promise<unknown | null> => {
-  if (sdkPromise) return sdkPromise;
-  sdkPromise = new Promise<unknown | null>(resolve => {
-    const req = configureRequireJs();
-    if (!req) {
-      resolve(null);
-      return;
-    }
-    req(['VSS/SDK'], (SDK: unknown) => resolve(SDK ?? null), () => resolve(null));
-  });
-  return sdkPromise;
 };
 
 /**
@@ -146,7 +109,13 @@ function deriveCollectionUriFromWindow(projectName: string | undefined): string 
 export async function initAdoContext(): Promise<AdoContext> {
   if (initPromise) return initPromise;
 
-  initPromise = (async (): Promise<AdoContext> => {
+  // `_retryable` is set inside the async body when a timeout occurs on an ADO host.
+  // It is read from the `.then()` chain OUTSIDE the body so that `initPromise` is
+  // mutated only after the promise settles — avoiding concurrent-caller races where
+  // a second caller sees `initPromise === null` and starts a parallel SDK.init().
+  let _retryable = false;
+
+  const _inner = (async (): Promise<AdoContext> => {
     const fallback: AdoContext = {
       isAdo: false,
       sdk: null,
@@ -156,20 +125,14 @@ export async function initAdoContext(): Promise<AdoContext> {
     };
 
     if (!hasAdoHostSignals()) {
-      return fallback;
-    }
-
-    const SDK = await loadAdoSdk();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sdk = SDK as any;
-    if (!sdk || typeof sdk.init !== 'function') {
+      // Definitively not an ADO host — cache the fallback permanently (correct).
       return fallback;
     }
 
     // Initialize SDK
     let initialized = true;
     try {
-      const initResult: unknown = sdk.init({ loaded: false, applyTheme: true });
+      const initResult: unknown = SDK.init({ loaded: false, applyTheme: true });
       if (initResult && typeof (initResult as Promise<unknown>).then === 'function') {
         initialized = await Promise.race([
           (initResult as Promise<unknown>).then(() => true).catch(() => false),
@@ -179,32 +142,43 @@ export async function initAdoContext(): Promise<AdoContext> {
     } catch {
       initialized = false;
     }
-    if (!initialized) return fallback;
+    if (!initialized) {
+      _retryable = true; // signal outer chain to clear initPromise for retry
+      return fallback;
+    }
 
     // Wait for SDK ready
     let ready = true;
-    if (typeof sdk.ready === 'function') {
+    try {
       ready = await Promise.race([
-        (sdk.ready() as Promise<unknown>).then(() => true).catch(() => false),
+        SDK.ready().then(() => true).catch(() => false),
         new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1500)),
       ]);
+    } catch {
+      ready = false;
     }
-    if (!ready) return fallback;
+    if (!ready) {
+      _retryable = true; // signal outer chain to clear initPromise for retry
+      return fallback;
+    }
 
     // Extract host/web context
-    const hostInfo = typeof sdk.getHost === 'function' ? sdk.getHost() : null;
-    const webContext =
-      (typeof sdk.getWebContext === 'function' && sdk.getWebContext()) ||
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hostInfo: any = typeof SDK.getHost === 'function' ? SDK.getHost() : null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const webContext: any =
+      (typeof SDK.getWebContext === 'function' && SDK.getWebContext()) ||
       hostInfo?.webContext ||
       null;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let project: any = webContext?.project ?? null;
     try {
-      if ((!project || !project.id) && typeof sdk.getPageContext === 'function') {
-        const pageContext = sdk.getPageContext();
-        if (pageContext?.project?.id) {
-          project = { ...project, ...pageContext.project };
+      if ((!project || !project.id) && typeof SDK.getPageContext === 'function') {
+        const pageContext = SDK.getPageContext();
+        const pageProject = pageContext?.webContext?.project;
+        if (pageProject?.id) {
+          project = { ...project, ...pageProject };
         }
       }
     } catch {
@@ -224,16 +198,13 @@ export async function initAdoContext(): Promise<AdoContext> {
       collectionUri = deriveCollectionUriFromWindow(project?.name as string | undefined);
     }
 
-    // Ensure trailing slash
     if (collectionUri && !collectionUri.endsWith('/')) {
       collectionUri = `${collectionUri}/`;
     }
 
     let accessToken = '';
     try {
-      if (typeof sdk.getAccessToken === 'function') {
-        accessToken = (await sdk.getAccessToken()) as string;
-      }
+      accessToken = (await SDK.getAccessToken()) as string;
     } catch {
       /* ignore token errors */
     }
@@ -246,6 +217,16 @@ export async function initAdoContext(): Promise<AdoContext> {
       accessToken,
     };
   })();
+
+  // Chain outside the async body: clear initPromise only after it settles,
+  // so concurrent callers always get the same pending promise (no race).
+  initPromise = _inner.then(result => {
+    if (_retryable) initPromise = null; // timed-out ADO host — allow retry on remount
+    return result;
+  }).catch(err => {
+    initPromise = null; // unexpected throw — always allow retry
+    throw err;
+  });
 
   return initPromise;
 }

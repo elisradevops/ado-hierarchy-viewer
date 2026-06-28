@@ -1,8 +1,9 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useHierarchyStore } from '../state/hierarchyStore';
 import { useConnectionStore } from '../state/connectionStore';
 import { useConfigStore } from '../state/configStore';
 import { fetchHierarchy } from '../api/hierarchyApi';
+import { fetchHierarchyDirect } from '../api/adoDirect';
 import { runHierarchyPipeline } from '../workers/workerClient';
 import type { AuthCtx } from '../types';
 
@@ -12,25 +13,26 @@ export function useHierarchyData(): {
   error: string | null;
 } {
   const abortRef = useRef<AbortController | null>(null);
-  const cancelledRef = useRef(false);
+  const generationRef = useRef(0);
+
+  // N6: abort in-flight request on unmount so the store is not written after teardown
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const { setResult, setLoading, setError, setUsedRelationTypes, loading, error } = useHierarchyStore();
-  const { orgUrl, credential } = useConnectionStore();
+  const { orgUrl, credential, mode } = useConnectionStore();
   const { config } = useConfigStore();
 
   const loadHierarchy = useCallback((): void => {
     if (!orgUrl || !credential || !config.teamProject || (config.relationTypes.length === 0 && !config.queryId)) return;
 
-    // Cancel any in-flight prior request
-    if (abortRef.current) {
-      cancelledRef.current = true;
-      abortRef.current.abort();
-    }
+    // Cancel any in-flight prior request — signal.aborted on the OLD controller
+    // becomes the per-call stale guard (closure-captured, never reset by a new call).
+    abortRef.current?.abort();
 
     const controller = new AbortController();
     abortRef.current = controller;
     const { signal } = controller;
-    cancelledRef.current = false;
+    const myGeneration = ++generationRef.current;
 
     setLoading(true);
     setError(null);
@@ -39,10 +41,12 @@ export function useHierarchyData(): {
 
     void (async () => {
       try {
-        // Fetch raw ADO data via BFF
-        const { workItemRelations, workItems, rootIds } = await fetchHierarchy(config, ctx, signal);
+        // Fetch raw ADO data — direct in extension mode, via BFF in standalone
+        const { workItemRelations, workItems, rootIds } = mode === 'extension'
+          ? await fetchHierarchyDirect(config, orgUrl, credential, signal)
+          : await fetchHierarchy(config, ctx, signal);
 
-        if (cancelledRef.current) return; // stale-response guard
+        if (signal.aborted) return; // stale-response guard — reads per-call closure signal
 
         // Extract unique non-null relation types actually present in the result
         const usedRels = [...new Set(workItemRelations.map(r => r.rel).filter((r): r is string => !!r))];
@@ -60,10 +64,10 @@ export function useHierarchyData(): {
           signal
         );
 
-        if (cancelledRef.current) return;
+        if (signal.aborted) return;
         setResult(result);
       } catch (err) {
-        if (cancelledRef.current) return;
+        if (signal.aborted) return;
         const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message === 'Aborted');
         if (!isAbort) {
           // Prefer the BFF error body message over axios's generic "Request failed with status code 4xx"
@@ -71,10 +75,12 @@ export function useHierarchyData(): {
           setError(bffMessage ?? (err instanceof Error ? err.message : 'Failed to load hierarchy'));
         }
       } finally {
-        if (!cancelledRef.current) setLoading(false);
+        // generation guard: only clear loading for the latest call.
+        // signal.aborted alone is wrong — it's true on unmount too, leaving loading stuck.
+        if (generationRef.current === myGeneration) setLoading(false);
       }
     })();
-  }, [orgUrl, credential, config, setResult, setLoading, setError, setUsedRelationTypes]);
+  }, [orgUrl, credential, config, mode, setResult, setLoading, setError, setUsedRelationTypes]);
 
   return { loadHierarchy, loading, error };
 }

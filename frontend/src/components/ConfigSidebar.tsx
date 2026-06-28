@@ -17,6 +17,7 @@ import { useConnectionStore } from '../state/connectionStore';
 import { useHierarchyStore } from '../state/hierarchyStore';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { fetchRelationTypes, fetchProjects, fetchWorkItemTypeMeta } from '../api/hierarchyApi';
+import { fetchRelationTypesDirect, fetchProjectsDirect, fetchWorkItemTypeMetaDirect } from '../api/adoDirect';
 import { QuerySelector } from './QuerySelector';
 
 import { computeSummaryStats } from '../selectors/summaryStats';
@@ -34,7 +35,7 @@ const COLLAPSED_WIDTH = 64;
 // ─── Module-level sx constants ──────────────────────────────────
 const SIDEBAR_STATIC_SX = {
   bgcolor: '#F4F6F9',
-  borderRight: '1px solid',
+  borderLeft: '1px solid',
   borderColor: 'divider',
   display: 'flex',
   flexDirection: 'column',
@@ -42,7 +43,7 @@ const SIDEBAR_STATIC_SX = {
   overflow: 'hidden',
   flexShrink: 0,
   transition: 'width 0.2s ease',
-  boxShadow: '2px 0 8px rgba(15,23,42,0.06)',
+  boxShadow: '-2px 0 8px rgba(15,23,42,0.06)',
 } as const;
 
 // Primary navy header — visible even when collapsed
@@ -169,6 +170,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const credential = useConnectionStore(s => s.credential);
   const status = useConnectionStore(s => s.status);
+  const mode = useConnectionStore(s => s.mode);
   const disconnectStore = useConnectionStore(s => s.disconnect);
 
   // ── Work item type metadata (colors + icons) ──
@@ -210,11 +212,13 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
     if (status !== 'connected' || !config.teamProject) return;
     let cancelled = false;
     const ctx: AuthCtx = { orgUrl, credential };
-    fetchWorkItemTypeMeta(config.teamProject, ctx)
+    (mode === 'extension'
+      ? fetchWorkItemTypeMetaDirect(orgUrl, credential, config.teamProject)
+      : fetchWorkItemTypeMeta(config.teamProject, ctx))
       .then(meta => { if (!cancelled) setMeta(meta); })
       .catch(() => { /* non-fatal — hardcoded fallbacks remain active */ });
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential, config.teamProject, setMeta]);
+  }, [status, orgUrl, credential, config.teamProject, mode, setMeta]);
 
   // Load projects + relation types when connected
   useEffect(() => {
@@ -231,11 +235,17 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
       ?? fallback;
 
     Promise.all([
-      fetchProjects(ctx).catch((err: unknown) => {
+      (mode === 'extension'
+        ? fetchProjectsDirect(orgUrl, credential)
+        : fetchProjects(ctx)
+      ).catch((err: unknown) => {
         fetchErrMsg = extractMsg(err, 'Failed to load projects');
         return [] as Array<{ id: string; name: string }>;
       }),
-      fetchRelationTypes(ctx).catch((err: unknown) => {
+      (mode === 'extension'
+        ? fetchRelationTypesDirect(orgUrl, credential)
+        : fetchRelationTypes(ctx)
+      ).catch((err: unknown) => {
         if (!fetchErrMsg) fetchErrMsg = extractMsg(err, 'Failed to load link types');
         return [];
       }),
@@ -252,7 +262,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
     }).finally(() => { if (!cancelled) setLoadingMeta(false); });
 
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential]);
+  }, [status, orgUrl, credential, mode]);
 
   const handleDisconnect = (): void => {
     storage.session.remove('orgUrl');
@@ -275,8 +285,21 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
 
   const currentWidth = sidebarCollapsed ? COLLAPSED_WIDTH : SIDEBAR_WIDTH;
 
+  // L2: memoize so spread doesn't create a new object on every render
+  const sidebarSx = useMemo(
+    () => ({ ...SIDEBAR_STATIC_SX, width: currentWidth, minWidth: currentWidth }),
+    [currentWidth]
+  );
+
+  // L1: hoist from inline options prop to satisfy react-hooks/rules-of-hooks and avoid recreation
+  const sortedLinkTypes = useMemo(() => {
+    const family = (ref: string) =>
+      ref.split('.').pop()?.replace(/-Forward$|-Reverse$/, '').replace(/([a-z])([A-Z])/g, '$1 $2') ?? ref;
+    return [...linkTypes].sort((a, b) => family(a.referenceName).localeCompare(family(b.referenceName)));
+  }, [linkTypes]);
+
   return (
-    <Box sx={{ ...SIDEBAR_STATIC_SX, width: currentWidth, minWidth: currentWidth }}>
+    <Box sx={sidebarSx}>
 
       {/* ── Section 1: Brand header (primary bg — always visible) ── */}
       <Box sx={sidebarCollapsed ? BRAND_ROW_COLLAPSED_SX : BRAND_ROW_SX}>
@@ -293,7 +316,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
             aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             sx={{ ...BRAND_TOGGLE_SX, ...(sidebarCollapsed ? {} : { ml: 'auto' }) }}
           >
-            {sidebarCollapsed ? <ChevronRightIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
+            {sidebarCollapsed ? <ChevronLeftIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
       </Box>
@@ -310,19 +333,20 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
           {/* Team Project */}
           <Autocomplete
             freeSolo
+            disabled={mode === 'extension'}
             options={projects}
             value={config.teamProject}
             onChange={(_e, val) => {
               if (typeof val === 'string') setConfig({ teamProject: val });
             }}
-            onInputChange={(_e, value) => setConfig({ teamProject: value })}
+            onInputChange={(_e, value) => { if (mode !== 'extension') setConfig({ teamProject: value }); }}
             loading={loadingMeta}
             renderInput={(params) => (
               <TextField
                 {...params}
                 label="Team Project"
                 required
-                helperText="Select or type your ADO team project"
+                helperText={mode === 'extension' ? 'Auto-selected from ADO context' : 'Select or type your ADO team project'}
                 InputProps={{
                   ...params.InputProps,
                   endAdornment: (
@@ -367,6 +391,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
             orgUrl={orgUrl}
             teamProject={config.teamProject}
             credential={credential}
+            mode={mode}
             selectedId={config.queryId ?? ''}
             onSelect={(id, name) => { setConfig({ queryId: id }); setQueryName(name); }}
             onClose={() => setQuerySelectorOpen(false)}
@@ -376,10 +401,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
           <Autocomplete
             multiple
             disableCloseOnSelect
-            options={useMemo(() => {
-              const family = (ref: string) => ref.split('.').pop()?.replace(/-Forward$|-Reverse$/, '').replace(/([a-z])([A-Z])/g, '$1 $2') ?? ref;
-              return [...linkTypes].sort((a, b) => family(a.referenceName).localeCompare(family(b.referenceName)));
-            }, [linkTypes])}
+            options={sortedLinkTypes}
             value={linkTypes.filter(lt => config.relationTypes.includes(lt.referenceName))}
             getOptionLabel={(opt) => typeof opt === 'string' ? opt : opt.displayName}
             isOptionEqualToValue={(opt, val) => opt.referenceName === val.referenceName}
@@ -563,8 +585,8 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
 
       <Divider />
 
-      {/* ── Section 4: Connection footer ── */}
-      {status === 'connected' && (
+      {/* ── Section 4: Connection footer — hidden in extension mode (SDK owns auth) ── */}
+      {status === 'connected' && mode !== 'extension' && (
         sidebarCollapsed ? (
           <Box sx={FOOTER_COLLAPSED_SX}>
             <Tooltip title={orgUrl ? `Disconnect from ${orgUrl}` : 'Disconnect'}>

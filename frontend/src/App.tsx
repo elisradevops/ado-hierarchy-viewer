@@ -56,8 +56,7 @@ export default function App(): React.ReactElement {
     void probe();
 
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [status, connectStandalone]);
   const { loadHierarchy, loading, error } = useHierarchyData();
   const rootIds = useHierarchyStore(s => s.rootIds);
   const lastFetchedAt = useHierarchyStore(s => s.lastFetchedAt);

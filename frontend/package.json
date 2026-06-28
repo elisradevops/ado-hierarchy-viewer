@@ -4,9 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/copy-ado-assets.mjs",
     "build": "tsc -b && vite build",
-    "package": "npm run build && tfx extension create --manifest-globs ado-extension/vss-extension.json --root ado-extension --output-path ado-extension/out",
+    "package": "npm run build && tfx extension create --manifest-globs vss-extension.json --root ado-extension --output-path ado-extension/out",
     "test": "vitest run",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -18,6 +17,7 @@
     "@mui/material": "^7.3.2",
     "@mui/x-tree-view": "^8.29.0",
     "axios": "^1.12.1",
+    "azure-devops-extension-api": "^5.273.0",
     "core-js": "^3",
     "js-file-download": "^0.4.12",
     "react": "^19.1.1",
@@ -30,6 +30,7 @@
   "devDependencies": {
     "@babel/plugin-transform-runtime": "*",
     "@eslint/js": "^9",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6",
     "@testing-library/react": "^16",
     "@testing-library/user-event": "^14",
