@@ -1,6 +1,8 @@
 import type { FlatRow } from '../types';
 
-export type SortCol = 'id' | 'type' | 'title' | 'state' | 'progressPct' | 'effort' | 'effortTotal';
+export type SortCol = 'id' | 'type' | 'title' | 'state' | 'progressPct' | 'effort' | 'effortTotal'
+  | 'assignedTo' | 'areaPath' | 'iterationPath' | 'storyPoints' | 'remainingWork'
+  | 'originalEstimate' | 'priority' | 'tags';
 
 function compareValue(a: FlatRow, b: FlatRow, col: SortCol, dir: 'asc' | 'desc'): number {
   const mult = dir === 'asc' ? 1 : -1;
@@ -8,13 +10,21 @@ function compareValue(a: FlatRow, b: FlatRow, col: SortCol, dir: 'asc' | 'desc')
   const bn = b.node;
 
   switch (col) {
-    case 'id':          return mult * (an.id - bn.id);
-    case 'type':        return mult * an.type.localeCompare(bn.type);
-    case 'title':       return mult * an.title.localeCompare(bn.title);
-    case 'state':       return mult * an.state.localeCompare(bn.state);
-    case 'progressPct': return mult * (an.progressPct - bn.progressPct);
-    case 'effort':      return mult * (an.effort - bn.effort);
-    case 'effortTotal': return mult * (an.effortTotal - bn.effortTotal);
+    case 'id':              return mult * (an.id - bn.id);
+    case 'type':            return mult * an.type.localeCompare(bn.type);
+    case 'title':           return mult * an.title.localeCompare(bn.title);
+    case 'state':           return mult * an.state.localeCompare(bn.state);
+    case 'progressPct':     return mult * (an.progressPct - bn.progressPct);
+    case 'effort':          return mult * (an.effort - bn.effort);
+    case 'effortTotal':     return mult * (an.effortTotal - bn.effortTotal);
+    case 'assignedTo':      return mult * (an.assignedTo ?? '').localeCompare(bn.assignedTo ?? '');
+    case 'areaPath':        return mult * (an.areaPath ?? '').localeCompare(bn.areaPath ?? '');
+    case 'iterationPath':   return mult * (an.iterationPath ?? '').localeCompare(bn.iterationPath ?? '');
+    case 'tags':            return mult * (an.tags ?? '').localeCompare(bn.tags ?? '');
+    case 'storyPoints':     return mult * ((an.storyPoints ?? 0) - (bn.storyPoints ?? 0));
+    case 'remainingWork':   return mult * ((an.remainingWork ?? 0) - (bn.remainingWork ?? 0));
+    case 'originalEstimate':return mult * ((an.originalEstimate ?? 0) - (bn.originalEstimate ?? 0));
+    case 'priority':        return mult * ((an.priority ?? 0) - (bn.priority ?? 0));
     default: return 0;
   }
 }
@@ -39,14 +49,18 @@ export function sortRows(rows: FlatRow[], col: SortCol, dir: 'asc' | 'desc'): Fl
     siblings.sort((a, b) => compareValue(a, b, col, dir));
   }
 
-  // Reconstruct via DFS
+  // Reconstruct via iterative DFS — avoids call-stack overflow on deep trees.
   const result: FlatRow[] = [];
-  function dfs(parentId: number | null): void {
-    for (const row of byParent.get(parentId) ?? []) {
-      result.push(row);
-      if (row.hasChildren) dfs(row.node.id);
+  const stack: FlatRow[] = [];
+  const roots = byParent.get(null) ?? [];
+  for (let i = roots.length - 1; i >= 0; i--) stack.push(roots[i]);
+  while (stack.length > 0) {
+    const row = stack.pop()!;
+    result.push(row);
+    if (row.hasChildren) {
+      const kids = byParent.get(row.node.id) ?? [];
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
     }
   }
-  dfs(null);
   return result;
 }

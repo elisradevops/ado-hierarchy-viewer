@@ -1,4 +1,4 @@
-import { fetchLinks, fetchWorkItems } from '../services/HierarchyService';
+import { fetchLinks, fetchWorkItems, fetchQueryRootIds } from '../services/HierarchyService';
 import { AdoClient } from '../services/AdoClient';
 import * as cache from '../services/cache';
 
@@ -35,7 +35,7 @@ describe('fetchLinks', () => {
 
     (client.post as jest.Mock).mockResolvedValueOnce({ workItemRelations: rawRelations });
 
-    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', 'System.LinkTypes.Hierarchy-Forward', 'forward');
+    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', ['System.LinkTypes.Hierarchy-Forward']);
 
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({ rel: 'System.LinkTypes.Hierarchy-Forward', source: { id: 1 }, target: { id: 2 } });
@@ -47,7 +47,7 @@ describe('fetchLinks', () => {
     const cached = [{ rel: 'X', source: { id: 1 }, target: { id: 2 } }];
     mockedCacheGet.mockReturnValue(cached);
 
-    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', 'X', 'forward');
+    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X']);
 
     expect(result).toBe(cached);
     expect(client.post).not.toHaveBeenCalled();
@@ -59,7 +59,7 @@ describe('fetchLinks', () => {
       workItemRelations: [{ rel: 'X', source: { id: 1 }, target: { id: 2 } }],
     });
 
-    await fetchLinks(client, 'https://ado.example.com', 'MyProject', 'X', 'forward');
+    await fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X']);
 
     expect(mockedCacheSet).toHaveBeenCalledTimes(1);
   });
@@ -68,7 +68,7 @@ describe('fetchLinks', () => {
     const client = makeClient();
     (client.post as jest.Mock).mockResolvedValueOnce({ workItemRelations: [] });
 
-    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', 'X', 'forward');
+    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X']);
 
     expect(result).toEqual([]);
   });
@@ -77,7 +77,7 @@ describe('fetchLinks', () => {
     const client = makeClient();
     (client.post as jest.Mock).mockResolvedValueOnce({});
 
-    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', 'X', 'forward');
+    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X']);
 
     expect(result).toEqual([]);
   });
@@ -86,11 +86,21 @@ describe('fetchLinks', () => {
     const client = makeClient();
     (client.post as jest.Mock).mockResolvedValueOnce({ workItemRelations: [] });
 
-    await fetchLinks(client, 'https://ado.example.com/', 'MyProject', 'X', 'forward');
+    await fetchLinks(client, 'https://ado.example.com/', 'MyProject', ['X']);
 
     // Should not double-slash the URL
     const calledUrl: string = (client.post as jest.Mock).mock.calls[0][0];
     expect(calledUrl).not.toContain('//MyProject');
+  });
+
+  it('WIQL body uses IN clause for multiple relation types', async () => {
+    const client = makeClient();
+    (client.post as jest.Mock).mockResolvedValueOnce({ workItemRelations: [] });
+
+    await fetchLinks(client, 'https://ado.example.com', 'Proj', ['System.LinkTypes.Hierarchy-Forward', 'System.LinkTypes.Related']);
+
+    const calledBody: { query: string } = (client.post as jest.Mock).mock.calls[0][1];
+    expect(calledBody.query).toContain("IN ('System.LinkTypes.Hierarchy-Forward','System.LinkTypes.Related')");
   });
 
   it('api-version fallback: retries on 400, succeeds on second attempt', async () => {
@@ -101,7 +111,7 @@ describe('fetchLinks', () => {
       .mockRejectedValueOnce(err400)
       .mockResolvedValueOnce({ workItemRelations: [] });
 
-    const result = await fetchLinks(client, 'https://ado.example.com', 'Proj', 'X', 'forward');
+    const result = await fetchLinks(client, 'https://ado.example.com', 'Proj', ['X']);
 
     expect(client.post).toHaveBeenCalledTimes(2);
     expect(result).toEqual([]);
@@ -114,7 +124,7 @@ describe('fetchLinks', () => {
     (client.post as jest.Mock).mockRejectedValue(err401);
 
     await expect(
-      fetchLinks(client, 'https://ado.example.com', 'Proj', 'X', 'forward')
+      fetchLinks(client, 'https://ado.example.com', 'Proj', ['X'])
     ).rejects.toMatchObject({ response: { status: 401 } });
 
     expect(client.post).toHaveBeenCalledTimes(1);
@@ -127,7 +137,7 @@ describe('fetchLinks', () => {
     (client.post as jest.Mock).mockRejectedValue(err403);
 
     await expect(
-      fetchLinks(client, 'https://ado.example.com', 'Proj', 'X', 'forward')
+      fetchLinks(client, 'https://ado.example.com', 'Proj', ['X'])
     ).rejects.toMatchObject({ response: { status: 403 } });
 
     expect(client.post).toHaveBeenCalledTimes(1);
@@ -140,7 +150,7 @@ describe('fetchLinks', () => {
     (client.post as jest.Mock).mockRejectedValue(err400);
 
     await expect(
-      fetchLinks(client, 'https://ado.example.com', 'Proj', 'X', 'forward')
+      fetchLinks(client, 'https://ado.example.com', 'Proj', ['X'])
     ).rejects.toMatchObject({ response: { status: 400 } });
 
     // 3 versions: '7.1', '5.1', ''
@@ -156,7 +166,7 @@ describe('fetchLinks', () => {
       ],
     });
 
-    const result = await fetchLinks(client, 'https://ado.example.com', 'Proj', 'X', 'forward');
+    const result = await fetchLinks(client, 'https://ado.example.com', 'Proj', ['X']);
 
     expect(result).toHaveLength(1);
     expect(result[0].source?.id).toBe(1);
@@ -196,11 +206,12 @@ describe('fetchWorkItems', () => {
       'https://ado.example.com',
       'MyProject',
       [42],
-      ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.TeamProject', 'Microsoft.VSTS.Scheduling.OriginalEstimate']
+      ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.TeamProject', 'Microsoft.VSTS.Scheduling.OriginalEstimate'],
+      'Microsoft.VSTS.Scheduling.OriginalEstimate'
     );
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({
+    expect(result[0]).toMatchObject({
       id: 42,
       type: 'Task',
       title: 'Do something',
@@ -303,5 +314,72 @@ describe('fetchWorkItems', () => {
     ).rejects.toMatchObject({ response: { status: 401 } });
 
     expect(client.post).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── fetchQueryRootIds ─────────────────────────────────────────────────────────
+
+describe('fetchQueryRootIds', () => {
+  it('returns ids from a flat query', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'flat',
+      workItems: [{ id: 10 }, { id: 20 }],
+    });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-1');
+
+    expect(result).toEqual([10, 20]);
+  });
+
+  it('returns top-level source ids from a tree query (sources not appearing as targets)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'tree',
+      workItemRelations: [
+        { source: { id: 1 }, target: { id: 2 } },
+        { source: { id: 2 }, target: { id: 3 } },
+      ],
+    });
+
+    // id 2 is a target → not a root; id 1 is only a source → root
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-2');
+
+    expect(result).toEqual([1]);
+  });
+
+  it('deduplicates root ids in tree query', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'tree',
+      workItemRelations: [
+        { source: { id: 1 }, target: { id: 2 } },
+        { source: { id: 1 }, target: { id: 3 } },
+      ],
+    });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-3');
+
+    expect(result).toEqual([1]);
+  });
+
+  it('returns empty array for unknown queryType', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({ queryType: 'oneHop' });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-4');
+
+    expect(result).toEqual([]);
+  });
+
+  it('returns cached value without calling AdoClient.get', async () => {
+    const client = makeClient();
+    const cached = [5, 6];
+    mockedCacheGet.mockReturnValue(cached);
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'cached-query');
+
+    expect(result).toBe(cached);
+    expect(client.get).not.toHaveBeenCalled();
   });
 });

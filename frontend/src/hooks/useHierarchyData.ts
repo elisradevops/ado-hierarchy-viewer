@@ -7,19 +7,20 @@ import { runHierarchyPipeline } from '../workers/workerClient';
 import type { AuthCtx } from '../types';
 
 export function useHierarchyData(): {
-  fetch: () => void;
+  loadHierarchy: () => void;
   loading: boolean;
   error: string | null;
 } {
-  const isFetchingRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);
 
-  const { setResult, setLoading, setError, loading, error } = useHierarchyStore();
-  const { orgUrl, credential, mode } = useConnectionStore();
+  const { setResult, setLoading, setError, setUsedRelationTypes, loading, error } = useHierarchyStore();
+  const { orgUrl, credential } = useConnectionStore();
   const { config } = useConfigStore();
 
-  const fetch = useCallback((): void => {
+  const loadHierarchy = useCallback((): void => {
+    if (!orgUrl || !credential || !config.teamProject || (config.relationTypes.length === 0 && !config.queryId)) return;
+
     // Cancel any in-flight prior request
     if (abortRef.current) {
       cancelledRef.current = true;
@@ -30,27 +31,31 @@ export function useHierarchyData(): {
     abortRef.current = controller;
     const { signal } = controller;
     cancelledRef.current = false;
-    isFetchingRef.current = true;
 
     setLoading(true);
     setError(null);
 
-    const ctx: AuthCtx = { orgUrl, credential, mode };
+    const ctx: AuthCtx = { orgUrl, credential };
 
     void (async () => {
       try {
         // Fetch raw ADO data via BFF
-        const { workItemRelations, workItems } = await fetchHierarchy(config, ctx, signal);
+        const { workItemRelations, workItems, rootIds } = await fetchHierarchy(config, ctx, signal);
 
         if (cancelledRef.current) return; // stale-response guard
+
+        // Extract unique non-null relation types actually present in the result
+        const usedRels = [...new Set(workItemRelations.map(r => r.rel).filter((r): r is string => !!r))];
+        setUsedRelationTypes(usedRels);
 
         // Run graph/tree algorithm (web worker if large)
         const result = await runHierarchyPipeline(
           {
             relations: workItemRelations,
             items: workItems,
-            direction: config.direction,
             closedState: config.closedState,
+            rootIds,
+            selectedRels: config.relationTypes,
           },
           signal
         );
@@ -61,14 +66,15 @@ export function useHierarchyData(): {
         if (cancelledRef.current) return;
         const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message === 'Aborted');
         if (!isAbort) {
-          setError(err instanceof Error ? err.message : 'Failed to load hierarchy');
+          // Prefer the BFF error body message over axios's generic "Request failed with status code 4xx"
+          const bffMessage = (err as { response?: { data?: { error?: string } } }).response?.data?.error;
+          setError(bffMessage ?? (err instanceof Error ? err.message : 'Failed to load hierarchy'));
         }
       } finally {
         if (!cancelledRef.current) setLoading(false);
-        isFetchingRef.current = false;
       }
     })();
-  }, [orgUrl, credential, mode, config, setResult, setLoading, setError]);
+  }, [orgUrl, credential, config, setResult, setLoading, setError, setUsedRelationTypes]);
 
-  return { fetch, loading, error };
+  return { loadHierarchy, loading, error };
 }

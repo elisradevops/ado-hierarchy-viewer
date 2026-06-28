@@ -87,7 +87,7 @@ describe('BFF route integration', () => {
     it('returns 400 when ADO credentials are missing', async () => {
       const res = await request(app)
         .post('/api/links')
-        .send({ project: 'P', relationType: 'X', direction: 'forward' });
+        .send({ project: 'P', relationTypes: ['X'] });
       expect(res.status).toBe(400);
     });
 
@@ -95,16 +95,16 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/links')
         .set(ADO_HEADERS)
-        .send({ relationType: 'X', direction: 'forward' });
+        .send({ relationTypes: ['X'] });
       expect(res.status).toBe(422);
       expect(res.body).toHaveProperty('error', 'Validation error');
     });
 
-    it('returns 422 on invalid direction value', async () => {
+    it('returns 422 on empty relationTypes array', async () => {
       const res = await request(app)
         .post('/api/links')
         .set(ADO_HEADERS)
-        .send({ project: 'P', relationType: 'X', direction: 'sideways' });
+        .send({ project: 'P', relationTypes: [] });
       expect(res.status).toBe(422);
     });
 
@@ -112,7 +112,7 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/links')
         .set(ADO_HEADERS)
-        .send({ project: 'MyProject', relationType: 'System.LinkTypes.Hierarchy-Forward', direction: 'forward' });
+        .send({ project: 'MyProject', relationTypes: ['System.LinkTypes.Hierarchy-Forward'] });
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('workItemRelations');
       expect(Array.isArray(res.body.workItemRelations)).toBe(true);
@@ -162,7 +162,7 @@ describe('BFF route integration', () => {
     it('returns 400 when credentials are missing', async () => {
       const res = await request(app)
         .post('/api/hierarchy')
-        .send({ project: 'P', relationType: 'X', direction: 'forward' });
+        .send({ project: 'P', relationTypes: ['X'] });
       expect(res.status).toBe(400);
     });
 
@@ -170,7 +170,7 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: 'MyProject', relationType: 'System.LinkTypes.Hierarchy-Forward', direction: 'forward' });
+        .send({ project: 'MyProject', relationTypes: ['System.LinkTypes.Hierarchy-Forward'] });
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('workItemRelations');
       expect(res.body).toHaveProperty('workItems');
@@ -180,7 +180,7 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: '', relationType: 'X', direction: 'forward' });
+        .send({ project: '', relationTypes: ['X'] });
       expect(res.status).toBe(422);
     });
 
@@ -198,7 +198,7 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: 'MyProject', relationType: 'X', direction: 'forward' });
+        .send({ project: 'MyProject', relationTypes: ['X'] });
 
       expect(res.status).toBe(200);
       expect(res.body.workItems).toHaveLength(3);
@@ -208,7 +208,8 @@ describe('BFF route integration', () => {
         expect.any(String),
         expect.any(String),
         expect.arrayContaining([1, 2, 3]),
-        expect.any(Array)
+        expect.any(Array),
+        expect.any(String)
       );
     });
 
@@ -218,7 +219,7 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: 'P', relationType: 'X', direction: 'forward' });
+        .send({ project: 'P', relationTypes: ['X'] });
 
       expect(res.status).toBe(500);
       expect(res.body).toHaveProperty('error');
@@ -234,7 +235,7 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/links')
         .set(ADO_HEADERS)
-        .send({ project: 'P', relationType: 'X', direction: 'forward' });
+        .send({ project: 'P', relationTypes: ['X'] });
 
       expect(res.status).toBe(500);
     });

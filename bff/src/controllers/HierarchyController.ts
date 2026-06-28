@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AdoClient } from '../services/AdoClient';
 import { extractCreds } from '../middleware/creds';
-import { fetchLinks, fetchWorkItems } from '../services/HierarchyService';
+import { fetchLinks, fetchWorkItems, fetchQueryRootIds } from '../services/HierarchyService';
 import {
   LinksRequestSchema,
   WorkItemsRequestSchema,
@@ -15,6 +15,15 @@ const BASE_WI_FIELDS = [
   'System.Title',
   'System.State',
   'System.TeamProject',
+  'System.AssignedTo',
+  'System.AreaPath',
+  'System.IterationPath',
+  'System.Tags',
+  'Microsoft.VSTS.Common.Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints',
+  'Microsoft.VSTS.Scheduling.RemainingWork',
+  'Microsoft.VSTS.Scheduling.OriginalEstimate',
+  'Microsoft.VSTS.Scheduling.CompletedWork',
 ];
 
 export async function postLinks(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -36,8 +45,7 @@ export async function postLinks(req: Request, res: Response, next: NextFunction)
       client,
       creds.orgUrl,
       parsed.data.project,
-      parsed.data.relationType,
-      parsed.data.direction
+      parsed.data.relationTypes
     );
     res.json({ workItemRelations: relations });
   } catch (err) {
@@ -89,19 +97,26 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
 
   try {
     const client = new AdoClient(creds.token);
-    const { project, relationType, direction, effortField } = parsed.data;
-    const fields = [...BASE_WI_FIELDS, effortField ?? DEFAULT_EFFORT_FIELD];
+    const { project, relationTypes, effortField, queryId } = parsed.data;
+    const fields = [...new Set([...BASE_WI_FIELDS, effortField ?? DEFAULT_EFFORT_FIELD])];
 
-    const relations = await fetchLinks(client, creds.orgUrl, project, relationType, direction);
-    const uniqueIds = [
-      ...new Set([
-        ...relations.filter(r => r.source).map(r => r.source!.id),
-        ...relations.filter(r => r.target).map(r => r.target!.id),
-      ]),
-    ];
+    let queryRootIds: number[] | undefined;
+    if (queryId) {
+      queryRootIds = await fetchQueryRootIds(client, creds.orgUrl, project, queryId);
+    }
 
-    const workItems = await fetchWorkItems(client, creds.orgUrl, project, uniqueIds, fields);
-    res.json({ workItemRelations: relations, workItems });
+    const relations = relationTypes.length > 0
+      ? await fetchLinks(client, creds.orgUrl, project, relationTypes)
+      : [];
+    const idSet = new Set([
+      ...relations.filter(r => r.source).map(r => r.source!.id),
+      ...relations.filter(r => r.target).map(r => r.target!.id),
+    ]);
+    for (const id of (queryRootIds ?? [])) idSet.add(id);
+    const uniqueIds = [...idSet];
+
+    const workItems = await fetchWorkItems(client, creds.orgUrl, project, uniqueIds, fields, effortField ?? DEFAULT_EFFORT_FIELD);
+    res.json({ workItemRelations: relations, workItems, rootIds: queryRootIds });
   } catch (err) {
     next(err);
   }

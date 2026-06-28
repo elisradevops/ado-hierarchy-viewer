@@ -10,8 +10,6 @@ import {
   MULTI_ROOT_ITEMS,
   ORPHAN_ITEMS,
   ORPHAN_RELATIONS,
-  REVERSE_RELATIONS,
-  REVERSE_ITEMS,
   SELF_LINK_RELATIONS,
   SELF_LINK_ITEMS,
 } from '../fixtures/relations';
@@ -20,7 +18,6 @@ function makeInput(overrides: Partial<BuildHierarchyInput> = {}): BuildHierarchy
   return {
     relations: [],
     items: [],
-    direction: 'forward',
     closedState: 'Closed',
     ...overrides,
   };
@@ -35,12 +32,11 @@ describe('buildHierarchy', () => {
     });
   });
 
-  describe('forward direction', () => {
+  describe('forward direction (via rel suffix)', () => {
     it('builds correct roots for linear chain', () => {
       const result = buildHierarchy(makeInput({
         relations: LINEAR_RELATIONS,
         items: LINEAR_ITEMS,
-        direction: 'forward',
       }));
       expect(result.roots).toHaveLength(1);
       expect(result.roots[0].id).toBe(1);
@@ -50,7 +46,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: LINEAR_RELATIONS,
         items: LINEAR_ITEMS,
-        direction: 'forward',
       }));
       expect(result.roots[0].children[0].id).toBe(2);
       expect(result.roots[0].children[0].children[0].id).toBe(3);
@@ -62,7 +57,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: MULTI_ROOT_RELATIONS,
         items: MULTI_ROOT_ITEMS,
-        direction: 'forward',
       }));
       expect(result.roots).toHaveLength(2);
     });
@@ -71,34 +65,58 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: MULTI_ROOT_RELATIONS,
         items: MULTI_ROOT_ITEMS,
-        direction: 'forward',
       }));
       const ids = result.roots.map(r => r.id);
       expect(ids).toEqual([...ids].sort((a, b) => a - b));
     });
   });
 
-  describe('reverse direction', () => {
-    it('inverts parent/child vs forward', () => {
-      // REVERSE_RELATIONS: rel(2, 1) — source=2, target=1
-      // forward: 2→1 (2 is parent, 1 is child)
-      // reverse: 1→2 (1 is parent, 2 is child)
+  describe('per-edge orientation', () => {
+    it('-Reverse suffix: no flip — edge goes source→target as-is', () => {
+      // graphBuilder does NOT flip Reverse edges; it relies on ADO returning
+      // Reverse relations as source=child, target=parent already.
+      // With the same source/target pair, Forward and Reverse produce the same structural result.
       const forwardResult = buildHierarchy(makeInput({
-        relations: REVERSE_RELATIONS,
-        items: REVERSE_ITEMS,
-        direction: 'forward',
+        relations: [rel(2, 1, 'System.LinkTypes.Hierarchy-Forward')],
+        items: [item(1), item(2)],
       }));
       const reverseResult = buildHierarchy(makeInput({
-        relations: REVERSE_RELATIONS,
-        items: REVERSE_ITEMS,
-        direction: 'reverse',
+        relations: [rel(2, 1, 'System.LinkTypes.Hierarchy-Reverse')],
+        items: [item(1), item(2)],
       }));
-      // In forward: root is 2, child is 1
+      // Forward: source(2)→target(1) → parent=2, child=1
       expect(forwardResult.roots[0].id).toBe(2);
       expect(forwardResult.roots[0].children[0].id).toBe(1);
-      // In reverse: root is 1, child is 2
-      expect(reverseResult.roots[0].id).toBe(1);
-      expect(reverseResult.roots[0].children[0].id).toBe(2);
+      // Reverse: same source→target, no flip → same structural result
+      expect(reverseResult.roots[0].id).toBe(2);
+      expect(reverseResult.roots[0].children[0].id).toBe(1);
+    });
+
+    it('true reverse: ADO returns source=child target=parent, tree structure follows that', () => {
+      // In ADO, a Reverse (Parent) relation comes back as source=child, target=parent.
+      // rel(source=1, target=2, 'Reverse') means "1's parent is 2" from ADO's perspective.
+      // No flip → parent=1, child=2 in adjacency → root=1, child=2.
+      const result = buildHierarchy(makeInput({
+        relations: [rel(1, 2, 'System.LinkTypes.Hierarchy-Reverse')],
+        items: [item(1), item(2)],
+      }));
+      expect(result.roots[0].id).toBe(1);
+      expect(result.roots[0].children[0].id).toBe(2);
+    });
+  });
+
+  describe('rootIds override', () => {
+    it('rootIds provided → roots come from that set, not in-degree-zero', () => {
+      // LINEAR_RELATIONS: 1→2→3, so natural root is [1]
+      // Override rootIds to [2] — should treat 2 as root
+      const result = buildHierarchy(makeInput({
+        relations: LINEAR_RELATIONS,
+        items: LINEAR_ITEMS,
+        rootIds: [2],
+      }));
+      expect(result.roots).toHaveLength(1);
+      expect(result.roots[0].id).toBe(2);
+      expect(result.roots[0].children[0].id).toBe(3);
     });
   });
 
@@ -107,7 +125,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: ORPHAN_RELATIONS,
         items: ORPHAN_ITEMS,
-        direction: 'forward',
       }));
       expect(result.orphanIds).toContain(99);
       expect(result.orphanIds).not.toContain(1);
@@ -118,7 +135,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: LINEAR_RELATIONS,
         items: LINEAR_ITEMS,
-        direction: 'forward',
       }));
       expect(result.orphanIds).toEqual([]);
     });
@@ -129,7 +145,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: SELF_LINK_RELATIONS,
         items: SELF_LINK_ITEMS,
-        direction: 'forward',
       }));
       // Self-link is dropped → no edges → no roots from adjacency
       // Item 1 has no relations → it's an orphan
@@ -144,7 +159,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: [],
         items: [item(5), item(6)],
-        direction: 'forward',
       }));
       expect(result.roots).toEqual([]);
       expect(result.orphanIds).toContain(5);
@@ -162,7 +176,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy({
         relations: diamondRelations,
         items: diamondItems,
-        direction: 'forward',
         closedState: 'Closed',
       });
       // Document current behavior: node 4 appears under both node 2 and node 3
@@ -185,7 +198,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: LINEAR_RELATIONS,
         items: LINEAR_ITEMS,
-        direction: 'forward',
       }));
       // Item 1=10, 2=5, 3=3: root effortTotal = 18
       expect(result.roots[0].effortTotal).toBe(18);
@@ -195,7 +207,6 @@ describe('buildHierarchy', () => {
       const result = buildHierarchy(makeInput({
         relations: [rel(1, 2)],
         items: [item(1), item(2, { state: 'Closed', effort: 5 })],
-        direction: 'forward',
         closedState: 'Closed',
       }));
       expect(result.roots[0].progressPct).toBe(100);

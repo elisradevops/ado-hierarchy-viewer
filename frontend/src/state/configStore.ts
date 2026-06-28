@@ -12,10 +12,10 @@ interface ConfigStore {
 const DEFAULT_CONFIG: HierarchyConfig = {
   tfsUrl: '',
   teamProject: '',
-  relationType: 'System.LinkTypes.Hierarchy-Forward',
-  direction: 'forward',
+  relationTypes: ['System.LinkTypes.Hierarchy-Forward'],
   closedState: DEFAULT_CLOSED_STATE,
   effortField: DEFAULT_EFFORT_FIELD,
+  queryId: '',
 };
 
 export const useConfigStore = create<ConfigStore>()(
@@ -32,6 +32,40 @@ export const useConfigStore = create<ConfigStore>()(
     }),
     {
       name: 'ado-hierarchy-viewer:config',
+      version: 2,
+      migrate(persisted: unknown, version: number) {
+        let state = persisted as Record<string, unknown>;
+
+        if (version < 1) {
+          const cfg = (state['config'] ?? {}) as Record<string, unknown>;
+          const relationType = cfg['relationType'];
+          const migrated = { ...cfg };
+          migrated['relationTypes'] = typeof relationType === 'string' && relationType
+            ? [relationType]
+            : DEFAULT_CONFIG.relationTypes;
+          delete migrated['relationType'];
+          delete migrated['direction'];
+          state = { config: migrated };
+        }
+
+        if (version < 2) {
+          // Strip artifact/resource link types (e.g. 'Hyperlink', 'ArtifactLink') that
+          // were never valid in WIQL WorkItemLinks queries. Valid work-item link reference
+          // names always contain a dot (System.LinkTypes.*, Elisra.*).
+          const cfg = (state['config'] ?? {}) as Record<string, unknown>;
+          const rels = Array.isArray(cfg['relationTypes']) ? cfg['relationTypes'] as string[] : [];
+          const cleaned = rels.filter((r: string) => r.includes('.'));
+          state = {
+            ...state,
+            config: {
+              ...cfg,
+              relationTypes: cleaned.length > 0 ? cleaned : DEFAULT_CONFIG.relationTypes,
+            },
+          };
+        }
+
+        return state;
+      },
       partialize: (state) => ({
         config: state.config,
       }),

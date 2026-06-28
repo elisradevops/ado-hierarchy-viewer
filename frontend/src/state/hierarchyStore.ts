@@ -4,12 +4,15 @@ import type { TreeNode, BuildHierarchyResult } from '../types';
 interface HierarchyStore {
   rootIds: number[];
   rowsById: Record<number, TreeNode>;
+  rowCount: number;
   orphanIds: number[];
   loading: boolean;
   error: string | null;
   lastFetchedAt: number | null;
+  usedRelationTypes: string[];
 
   setResult: (result: BuildHierarchyResult) => void;
+  setUsedRelationTypes: (types: string[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clear: () => void;
@@ -18,23 +21,27 @@ interface HierarchyStore {
 export const useHierarchyStore = create<HierarchyStore>((set) => ({
   rootIds: [],
   rowsById: {},
+  rowCount: 0,
   orphanIds: [],
   loading: false,
   error: null,
   lastFetchedAt: null,
+  usedRelationTypes: [],
 
   setResult: (result) => {
-    // Build Record<number, TreeNode> for O(1) lookup per CLAUDE.md
+    // Build Record<number, TreeNode> for O(1) lookup — iterative DFS, stack-safe at any depth
     const rowsById: Record<number, TreeNode> = {};
-    function indexNode(node: TreeNode): void {
+    const indexStack: TreeNode[] = [...result.roots];
+    while (indexStack.length > 0) {
+      const node = indexStack.pop()!;
       rowsById[node.id] = node;
-      for (const child of node.children) indexNode(child);
+      for (const child of node.children) indexStack.push(child);
     }
-    for (const root of result.roots) indexNode(root);
 
     set({
       rootIds: result.roots.map(r => r.id),
       rowsById,
+      rowCount: Object.keys(rowsById).length,
       orphanIds: result.orphanIds,
       loading: false,
       error: null,
@@ -42,7 +49,8 @@ export const useHierarchyStore = create<HierarchyStore>((set) => ({
     });
   },
 
+  setUsedRelationTypes: (types) => set({ usedRelationTypes: types }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error, loading: false }),
-  clear: () => set({ rootIds: [], rowsById: {}, orphanIds: [], loading: false, error: null, lastFetchedAt: null }),
+  clear: () => set({ rootIds: [], rowsById: {}, rowCount: 0, orphanIds: [], loading: false, error: null, lastFetchedAt: null, usedRelationTypes: [] }),
 }));

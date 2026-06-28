@@ -26,43 +26,7 @@ export const ADO_LINK_TYPES = {
   ELISRA_COVERED_BY_REVERSE: 'Elisra.CoveredBy-Reverse', // customer req covered by system req
 } as const;
 
-export type AdoLinkType = (typeof ADO_LINK_TYPES)[keyof typeof ADO_LINK_TYPES];
-
-// Tokens for substring-based matching (matches both -Forward and -Reverse variants + custom namespaces)
-export const TRACEABILITY_TOKENS = ['Affects', 'CoveredBy'] as const;
-
-// Link types that are NOT work-item relations (file attachments, hyperlinks, etc.)
-export const NON_WI_RELATION_TYPES = new Set([
-  'AttachedFile',
-  'Hyperlink',
-  'ArtifactLink',
-]);
-
-export function isTraceabilityRel(rel: string): boolean {
-  return TRACEABILITY_TOKENS.some(token => rel.includes(token));
-}
-
-export function isWorkItemRel(rel: string): boolean {
-  return !NON_WI_RELATION_TYPES.has(rel);
-}
-
-/**
- * Resolve a user-facing input (display name, partial name, or full reference name)
- * to a canonical reference name.
- * Falls back to the input itself if no match found (pass-through for dynamically discovered types).
- */
-export function resolveRelationType(input: string): string {
-  const normalized = input.trim().toLowerCase();
-  for (const refName of Object.values(ADO_LINK_TYPES)) {
-    if (refName.toLowerCase() === normalized) return refName;
-    // Match by last segment: 'Hierarchy-Forward' matches 'System.LinkTypes.Hierarchy-Forward'
-    const lastSegment = refName.split('.').pop()?.toLowerCase();
-    if (lastSegment && lastSegment === normalized) return refName;
-  }
-  return input.trim();
-}
-
-// Seed catalog for populating the RelationType dropdown before dynamic discovery
+// Seed catalog for display-name lookup in relationship chips
 export interface LinkTypeSeedEntry {
   referenceName: string;
   displayName: string;

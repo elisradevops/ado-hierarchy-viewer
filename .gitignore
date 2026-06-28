@@ -1,7 +1,10 @@
 node_modules
 dist
 ado-extension/dist
-public/lib
+**/public/lib
 *.vsix
 coverage
 .env
+.claude
+*.tsbuildinfo
+.playwright-mcp/

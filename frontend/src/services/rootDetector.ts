@@ -4,11 +4,11 @@ export function findRoots(adjacency: AdjacencyMap): number[] {
   const allNodes = new Set<number>();
   const childNodes = new Set<number>();
 
-  for (const [parentId, children] of adjacency) {
+  for (const [parentId, edges] of adjacency) {
     allNodes.add(parentId);
-    for (const childId of children) {
-      allNodes.add(childId);
-      childNodes.add(childId);
+    for (const edge of edges) {
+      allNodes.add(edge.childId);
+      childNodes.add(edge.childId);
     }
   }
 

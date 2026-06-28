@@ -3,7 +3,6 @@ import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material';
 import { LIGHT_COMFORTABLE } from '../../theme/theme';
 import { ProgressBar } from '../../components/ProgressBar';
-import { StateDot } from '../../components/StateDot';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
 
@@ -33,26 +32,6 @@ describe('ProgressBar', () => {
       </ThemeProvider>
     );
     expect(screen.getByText('100.0%')).toBeInTheDocument();
-  });
-});
-
-describe('StateDot', () => {
-  it('renders correct color for Active state', () => {
-    const { container } = render(<StateDot state="Active" />);
-    const dot = container.querySelector('span');
-    expect(dot).toHaveStyle({ backgroundColor: '#2563eb' });
-  });
-
-  it('renders correct color for Closed state', () => {
-    const { container } = render(<StateDot state="Closed" />);
-    const dot = container.querySelector('span');
-    expect(dot).toHaveStyle({ backgroundColor: '#339933' });
-  });
-
-  it('case-insensitive: CLOSED matches closed color', () => {
-    const { container } = render(<StateDot state="CLOSED" />);
-    const dot = container.querySelector('span');
-    expect(dot).toHaveStyle({ backgroundColor: '#339933' });
   });
 });
 

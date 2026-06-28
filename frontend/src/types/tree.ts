@@ -2,7 +2,13 @@ import type { WorkItemRelation, WorkItem } from './ado';
 
 export type Direction = 'forward' | 'reverse';
 
-export type AdjacencyMap = Map<number, Set<number>>;
+export interface AdjacencyEdge {
+  childId: number;
+  rel: string;
+  isRef?: boolean; // opposite-direction tagged ref (not recursed in tree)
+}
+
+export type AdjacencyMap = Map<number, AdjacencyEdge[]>;
 
 export interface TreeNode {
   id: number;
@@ -13,6 +19,22 @@ export interface TreeNode {
   effortTotal: number;  // own + recursive sum of children
   progressPct: number;  // round(100*closedLeaves/totalLeaves, 2), 0 if no leaves
   children: TreeNode[];
+  // Display fields
+  assignedTo?: string;
+  areaPath?: string;
+  iterationPath?: string;
+  priority?: number | null;
+  tags?: string;
+  storyPoints?: number | null;
+  remainingWork?: number | null;
+  originalEstimate?: number | null;
+  completedWork?: number | null;
+  completedWorkTotal: number;
+  remainingWorkTotal: number;
+  /** The relation type that linked this node to its parent (undefined for roots) */
+  linkRel?: string;
+  /** True when this node is a tagged reference (opposite-direction link) — not recursed */
+  isRef?: boolean;
 }
 
 export interface FlatRow {
@@ -26,8 +48,9 @@ export interface FlatRow {
 export interface BuildHierarchyInput {
   relations: WorkItemRelation[];
   items: WorkItem[];
-  direction: Direction;
   closedState: string;
+  rootIds?: number[];
+  selectedRels?: string[];
 }
 
 export interface BuildHierarchyResult {

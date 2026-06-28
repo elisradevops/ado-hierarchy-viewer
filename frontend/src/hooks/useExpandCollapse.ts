@@ -15,7 +15,7 @@ export function useExpandCollapse(): {
   const rowsById = useHierarchyStore(s => s.rowsById);
 
   const expandAll = useCallback(() => {
-    expandAllStore(Object.keys(rowsById).map(Number));
+    expandAllStore(Object.keys(rowsById).map(Number).filter(Number.isFinite));
   }, [expandAllStore, rowsById]);
 
   return {

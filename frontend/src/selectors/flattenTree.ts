@@ -6,31 +6,30 @@ export function flattenTree(
 ): FlatRow[] {
   const rows: FlatRow[] = [];
 
-  function visit(node: TreeNode, depth: number, parentId: number | null): void {
+  // Iterative DFS via explicit stack — avoids call-stack overflow on deeply nested trees.
+  // Stack holds items in reverse child order so they are processed left-to-right.
+  interface StackEntry { node: TreeNode; depth: number; parentId: number | null; }
+  const stack: StackEntry[] = [];
+
+  for (let i = roots.length - 1; i >= 0; i--) {
+    stack.push({ node: roots[i], depth: 0, parentId: null });
+  }
+
+  while (stack.length > 0) {
+    const { node, depth, parentId } = stack.pop()!;
     const hasChildren = node.children.length > 0;
     const isExpanded = hasChildren && Boolean(expandedIds[node.id]);
 
-    rows.push({
-      node: {
-        id: node.id,
-        type: node.type,
-        title: node.title,
-        state: node.state,
-        effort: node.effort,
-        effortTotal: node.effortTotal,
-        progressPct: node.progressPct,
-      },
-      depth,
-      hasChildren,
-      isExpanded,
-      parentId,
-    });
+    const { children: _children, ...nodeFields } = node;
+    rows.push({ node: nodeFields, depth, hasChildren, isExpanded, parentId });
 
     if (isExpanded) {
-      for (const child of node.children) visit(child, depth + 1, node.id);
+      // Push children in reverse order so first child is processed next
+      for (let i = node.children.length - 1; i >= 0; i--) {
+        stack.push({ node: node.children[i], depth: depth + 1, parentId: node.id });
+      }
     }
   }
 
-  for (const root of roots) visit(root, 0, null);
   return rows;
 }

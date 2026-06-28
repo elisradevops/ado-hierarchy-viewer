@@ -25,9 +25,11 @@ export function runHierarchyPipeline(
       { type: 'module' }
     );
 
-    const cleanup = (): void => { worker.terminate(); };
+    // Named handler so it can be removed in cleanup (prevents a one-per-call listener leak)
+    const onAbort = (): void => { cleanup(); reject(new Error('Aborted')); };
+    const cleanup = (): void => { worker.terminate(); signal?.removeEventListener('abort', onAbort); };
 
-    signal?.addEventListener('abort', () => { cleanup(); reject(new Error('Aborted')); });
+    signal?.addEventListener('abort', onAbort);
 
     worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
       cleanup();
@@ -38,7 +40,7 @@ export function runHierarchyPipeline(
 
     worker.onerror = (err) => {
       cleanup();
-      reject(new Error(err.message));
+      reject(new Error(err.message || 'Worker error'));
     };
 
     worker.postMessage(input);

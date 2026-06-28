@@ -17,7 +17,7 @@ import { useConnectionStore } from '../state/connectionStore';
 import { httpClient } from '../api/httpClient';
 import { buildAuthHeaders } from '../api/authHeaders';
 import { normalizeAdoOrgUrl } from '../utils/adoUrlUtils';
-import { storage, cookies } from '../utils/storage';
+import { storage } from '../utils/storage';
 
 const LAST_ORG_KEY = 'lastOrgUrl';
 
@@ -84,10 +84,10 @@ export function LoginForm(): React.ReactElement {
     setIsMutating(true);
     setError(null);
     try {
-      await httpClient.get('/health', { headers: buildAuthHeaders(normalizedUrl, pat) });
+      await httpClient.get('/validate-connection', { headers: buildAuthHeaders(normalizedUrl, pat) });
       storage.local.set(LAST_ORG_KEY, normalizedUrl);
-      cookies.set('orgUrl', normalizedUrl);
-      cookies.set('pat', pat);
+      storage.session.set('orgUrl', normalizedUrl);
+      storage.session.set('pat', pat);
       connectStandalone(normalizedUrl, pat);
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -135,7 +135,7 @@ export function LoginForm(): React.ReactElement {
             />
             <TextField fullWidth label="Personal Access Token" type={showPat ? 'text' : 'password'}
               value={pat} onChange={e => setPat(e.target.value)} required disabled={isMutating}
-              helperText="Needs Work (read) scope · Session saved in browser cookie" sx={{ mb: 3 }}
+              helperText="Needs Work (read) scope · Session-only — cleared when the tab closes" sx={{ mb: 3 }}
               slotProps={{ input: { endAdornment: (
                 <InputAdornment position="end">
                   <IconButton size="small" onClick={() => setShowPat(p => !p)} edge="end"

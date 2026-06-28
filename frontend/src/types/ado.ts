@@ -11,6 +11,15 @@ export interface WorkItem {
   state: string;  // System.State
   teamProject: string; // System.TeamProject
   effort: number | null; // effortField value (null if absent)
+  assignedTo?: string;
+  areaPath?: string;
+  iterationPath?: string;
+  priority?: number | null;
+  tags?: string;
+  storyPoints?: number | null;
+  remainingWork?: number | null;
+  originalEstimate?: number | null;
+  completedWork?: number | null;
   url?: string;
 }
 
@@ -32,4 +41,14 @@ export interface RelationType {
   referenceName: string;
   name: string;
   attributes?: Record<string, unknown>;
+}
+
+export interface QueryTreeNode {
+  id: string;
+  name: string;
+  path: string;
+  isFolder: boolean;
+  queryType?: 'flat' | 'tree' | 'oneHop';
+  hasChildren: boolean;
+  children?: QueryTreeNode[];
 }

@@ -1,29 +1,30 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Accordion, AccordionDetails, AccordionSummary,
-  Autocomplete, Box, Button, CircularProgress,
-  Divider, IconButton, TextField, ToggleButton, ToggleButtonGroup,
-  Tooltip, Typography,
+  Accordion, AccordionDetails, AccordionSummary, Alert,
+  Autocomplete, Box, Button, Chip, CircularProgress,
+  Divider, IconButton, TextField,
+  Tooltip, Typography, alpha,
 } from '@mui/material';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useConfigStore } from '../state/configStore';
 import { useConnectionStore } from '../state/connectionStore';
 import { useHierarchyStore } from '../state/hierarchyStore';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { fetchRelationTypes, fetchProjects, fetchWorkItemTypeMeta } from '../api/hierarchyApi';
-import { SEED_LINK_TYPES } from '../domain/adoLinkTypes';
+import { QuerySelector } from './QuerySelector';
+
 import { computeSummaryStats } from '../selectors/summaryStats';
 import { HierarchySummary } from './HierarchySummary';
 import { deriveOrgName } from '../utils/adoUrlUtils';
-import { cookies } from '../utils/storage';
+import { storage } from '../utils/storage';
 import { useWorkItemMetaStore } from '../state/workItemMetaStore';
+import { TYPE_ICON_IDS, TYPE_COLORS } from './TreeRow';
 import type { AuthCtx } from '../types';
 
 // ─── Layout constants ───────────────────────────────────────────
@@ -135,8 +136,6 @@ const ORG_NAME_SX = {
   color: 'text.secondary',
 } as const;
 
-const DIR_CAPTION_SX = { mt: 0.5, fontSize: '0.7rem', color: 'text.disabled' } as const;
-
 const COLLAPSED_ICON_AREA_SX = {
   display: 'flex',
   flexDirection: 'column',
@@ -164,17 +163,19 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
   const setFilter = useUiPrefsStore(s => s.setFilter);
 
   // ── Config ──
-  const { config, setConfig } = useConfigStore();
+  const { config, setConfig, resetConfig } = useConfigStore();
 
   // ── Connection ──
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const credential = useConnectionStore(s => s.credential);
   const status = useConnectionStore(s => s.status);
-  const mode = useConnectionStore(s => s.mode);
   const disconnectStore = useConnectionStore(s => s.disconnect);
 
   // ── Work item type metadata (colors + icons) ──
   const setMeta = useWorkItemMetaStore(s => s.setMeta);
+  const typeColors = useWorkItemMetaStore(s => s.typeColors);
+  const rawTypeIconUrls = useWorkItemMetaStore(s => s.typeIconUrls);
+  const clearMeta = useWorkItemMetaStore(s => s.clear);
 
   // ── Hierarchy ──
   const rootIds = useHierarchyStore(s => s.rootIds);
@@ -183,40 +184,64 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
 
   // ── Local state ──
   const [projects, setProjects] = useState<string[]>([]);
-  const [linkTypes, setLinkTypes] = useState<LinkTypeOption[]>(
-    SEED_LINK_TYPES.map(lt => ({ referenceName: lt.referenceName, displayName: lt.displayName }))
-  );
+  const [linkTypes, setLinkTypes] = useState<LinkTypeOption[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [querySelectorOpen, setQuerySelectorOpen] = useState(false);
+  const [queryName, setQueryName] = useState<string>('');
 
   // ── Derived ──
   const orgName = orgUrl ? deriveOrgName(orgUrl) : '';
-  const activeLinkType = linkTypes.find(lt => lt.referenceName === config.relationType) ?? null;
   const stats = useMemo(() => computeSummaryStats(rootIds, rowsById), [rootIds, rowsById]);
+  const availableWitTypes = useMemo(() => Object.keys(typeColors).sort(), [typeColors]);
+  const iconUrlMap = useMemo(() => {
+    if (!orgUrl) return rawTypeIconUrls;
+    const base = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
+    const fallbacks: Record<string, string> = {};
+    for (const [type, iconId] of Object.entries(TYPE_ICON_IDS)) {
+      fallbacks[type] = `${base}_apis/wit/workitemicons/${iconId}?api-version=7.1`;
+    }
+    return { ...fallbacks, ...rawTypeIconUrls };
+  }, [orgUrl, rawTypeIconUrls]);
 
   // Load work item type metadata (colors + icons) when project is set and connected.
   // Fires again if project changes. Errors silently degrade to hardcoded colors.
   useEffect(() => {
     if (status !== 'connected' || !config.teamProject) return;
     let cancelled = false;
-    const ctx: AuthCtx = { orgUrl, credential, mode };
+    const ctx: AuthCtx = { orgUrl, credential };
     fetchWorkItemTypeMeta(config.teamProject, ctx)
       .then(meta => { if (!cancelled) setMeta(meta); })
       .catch(() => { /* non-fatal — hardcoded fallbacks remain active */ });
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential, mode, config.teamProject, setMeta]);
+  }, [status, orgUrl, credential, config.teamProject, setMeta]);
 
   // Load projects + relation types when connected
   useEffect(() => {
     if (status !== 'connected') return;
     let cancelled = false;
-    const ctx: AuthCtx = { orgUrl, credential, mode };
+    const ctx: AuthCtx = { orgUrl, credential };
     setLoadingMeta(true);
+    setMetaError(null);
+
+    let fetchErrMsg: string | null = null;
+    const extractMsg = (err: unknown, fallback: string): string =>
+      (err as { response?: { data?: { error?: string } } }).response?.data?.error
+      ?? (err instanceof Error ? err.message : null)
+      ?? fallback;
 
     Promise.all([
-      fetchProjects(ctx).catch(() => [] as Array<{ id: string; name: string }>),
-      fetchRelationTypes(ctx).catch(() => []),
+      fetchProjects(ctx).catch((err: unknown) => {
+        fetchErrMsg = extractMsg(err, 'Failed to load projects');
+        return [] as Array<{ id: string; name: string }>;
+      }),
+      fetchRelationTypes(ctx).catch((err: unknown) => {
+        if (!fetchErrMsg) fetchErrMsg = extractMsg(err, 'Failed to load link types');
+        return [];
+      }),
     ]).then(([proj, rel]) => {
       if (cancelled) return;
+      if (fetchErrMsg) setMetaError(fetchErrMsg);
       setProjects((proj as Array<{ id: string; name: string }>).map(p => p.name));
       if ((rel as Array<{ referenceName: string; name: string }>).length > 0) {
         setLinkTypes((rel as Array<{ referenceName: string; name: string }>).map(r => ({
@@ -227,13 +252,15 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
     }).finally(() => { if (!cancelled) setLoadingMeta(false); });
 
     return () => { cancelled = true; };
-  }, [status, orgUrl, credential, mode]);
+  }, [status, orgUrl, credential]);
 
   const handleDisconnect = (): void => {
-    cookies.remove('orgUrl');
-    cookies.remove('pat');
+    storage.session.remove('orgUrl');
+    storage.session.remove('pat');
     disconnectStore();
     clearHierarchy();
+    resetConfig();
+    clearMeta();
   };
 
   const handleFilterByType = (type: string): void => {
@@ -274,6 +301,11 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
       {/* ── Section 2: Config fields ── */}
       {!sidebarCollapsed ? (
         <Box sx={FIELDS_SX}>
+          {metaError && (
+            <Alert severity="error" sx={{ mb: 1 }} onClose={() => setMetaError(null)}>
+              {metaError}
+            </Alert>
+          )}
           <Typography sx={SECTION_LABEL_SX}>Query</Typography>
           {/* Team Project */}
           <Autocomplete
@@ -304,50 +336,159 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
             )}
           />
 
-          {/* Link Type */}
+          {/* Source Query — click to browse ADO query tree */}
+          <TextField
+            fullWidth
+            label="Source Query"
+            value={queryName || (config.queryId ? `ID: ${config.queryId}` : '')}
+            slotProps={{
+              input: {
+                readOnly: true,
+                endAdornment: config.queryId ? (
+                  <IconButton
+                    size="small"
+                    edge="end"
+                    onClick={(e) => { e.stopPropagation(); setConfig({ queryId: '' }); setQueryName(''); }}
+                    aria-label="Clear query"
+                  >
+                    <Typography sx={{ fontSize: '0.75rem', lineHeight: 1 }}>✕</Typography>
+                  </IconButton>
+                ) : undefined,
+              },
+            }}
+            placeholder="Click to browse or paste a query ID…"
+            helperText={config.queryId ? 'Seeds the hierarchy from saved query results.' : 'Optional: pick a saved query to seed top-level items.'}
+            size="small"
+            onClick={() => { if (config.teamProject) setQuerySelectorOpen(true); }}
+            sx={{ cursor: config.teamProject ? 'pointer' : 'default' }}
+          />
+          <QuerySelector
+            open={querySelectorOpen}
+            orgUrl={orgUrl}
+            teamProject={config.teamProject}
+            credential={credential}
+            selectedId={config.queryId ?? ''}
+            onSelect={(id, name) => { setConfig({ queryId: id }); setQueryName(name); }}
+            onClose={() => setQuerySelectorOpen(false)}
+          />
+
+          {/* Link Types */}
           <Autocomplete
-            options={linkTypes}
-            value={activeLinkType}
+            multiple
+            disableCloseOnSelect
+            options={useMemo(() => {
+              const family = (ref: string) => ref.split('.').pop()?.replace(/-Forward$|-Reverse$/, '').replace(/([a-z])([A-Z])/g, '$1 $2') ?? ref;
+              return [...linkTypes].sort((a, b) => family(a.referenceName).localeCompare(family(b.referenceName)));
+            }, [linkTypes])}
+            value={linkTypes.filter(lt => config.relationTypes.includes(lt.referenceName))}
             getOptionLabel={(opt) => typeof opt === 'string' ? opt : opt.displayName}
             isOptionEqualToValue={(opt, val) => opt.referenceName === val.referenceName}
+            groupBy={(opt) => {
+              const ref = typeof opt === 'string' ? opt : opt.referenceName;
+              return ref.split('.').pop()?.replace(/-Forward$|-Reverse$/, '').replace(/([a-z])([A-Z])/g, '$1 $2') ?? ref;
+            }}
             onChange={(_e, val) => {
-              if (val === null) { setConfig({ relationType: '' }); return; }
-              if (typeof val !== 'string') setConfig({ relationType: val.referenceName });
+              setConfig({ relationTypes: val.map(v => typeof v === 'string' ? v : v.referenceName) });
+            }}
+            renderOption={(props, option) => {
+              const ref = typeof option === 'string' ? option : option.referenceName;
+              const label = typeof option === 'string' ? option : option.displayName;
+              const dir = ref.endsWith('-Forward') ? '↓' : ref.endsWith('-Reverse') ? '↑' : '↔';
+              const { key, ...liProps } = props as React.HTMLAttributes<HTMLLIElement> & { key?: React.Key };
+              return (
+                <Box key={key} component="li" {...liProps} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5 }}>
+                  <Typography sx={{ fontSize: '0.75rem', color: 'text.disabled', flexShrink: 0, width: 14, textAlign: 'center' }}>{dir}</Typography>
+                  <Typography sx={{ fontSize: '0.8125rem', flexGrow: 1 }}>{label}</Typography>
+                </Box>
+              );
             }}
             renderInput={(params) => (
               <TextField
                 {...params}
-                label="Link Type"
-                helperText="Link relationship type to traverse"
+                label="Link Types"
+                helperText="Which link relationships to follow when building the tree."
               />
             )}
           />
 
-          {/* Direction */}
-          <Box>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
-              Direction
-            </Typography>
-            <ToggleButtonGroup
-              exclusive
-              value={config.direction}
-              onChange={(_e, val) => { if (val) setConfig({ direction: val }); }}
-              size="small"
-              fullWidth
-            >
-              <ToggleButton value="forward">
-                <ArrowForwardIcon fontSize="small" sx={{ mr: 0.5 }} />
-                Forward
-              </ToggleButton>
-              <ToggleButton value="reverse">
-                <ArrowBackIcon fontSize="small" sx={{ mr: 0.5 }} />
-                Reverse
-              </ToggleButton>
-            </ToggleButtonGroup>
-            <Typography variant="caption" color="text.secondary" sx={DIR_CAPTION_SX}>
-              Forward: source → target&nbsp;&nbsp;Reverse: target → source
-            </Typography>
-          </Box>
+          {/* Work Item Types */}
+          <Autocomplete
+            multiple
+            options={availableWitTypes}
+            value={filter.types}
+            onChange={(_e, val) => setFilter({ types: val })}
+            disableCloseOnSelect
+            renderOption={(props, option) => {
+              const color = typeColors[option] ?? TYPE_COLORS[option] ?? '#8A8886';
+              const iconUrl = iconUrlMap[option];
+              const { key, ...liProps } = props as React.HTMLAttributes<HTMLLIElement> & { key?: React.Key };
+              return (
+                <Box key={key} component="li" {...liProps} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5 }}>
+                  {iconUrl ? (
+                    <Box
+                      component="img"
+                      src={iconUrl}
+                      alt=""
+                      aria-hidden="true"
+                      onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                        (e.currentTarget as HTMLImageElement).style.display = 'none';
+                      }}
+                      sx={{ width: 14, height: 14, flexShrink: 0 }}
+                    />
+                  ) : (
+                    <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+                  )}
+                  <Typography sx={{ fontSize: '0.8125rem' }}>{option}</Typography>
+                </Box>
+              );
+            }}
+            renderTags={(value, getTagProps) =>
+              value.map((option, index) => {
+                const color = typeColors[option] ?? TYPE_COLORS[option] ?? '#8A8886';
+                const iconUrl = iconUrlMap[option];
+                const { key, ...tagProps } = getTagProps({ index });
+                return (
+                  <Chip
+                    key={key}
+                    {...tagProps}
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        {iconUrl && (
+                          <Box
+                            component="img"
+                            src={iconUrl}
+                            alt=""
+                            aria-hidden="true"
+                            onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                              (e.currentTarget as HTMLImageElement).style.display = 'none';
+                            }}
+                            sx={{ width: 11, height: 11, flexShrink: 0 }}
+                          />
+                        )}
+                        {option}
+                      </Box>
+                    }
+                    size="small"
+                    sx={{
+                      bgcolor: alpha(color, 0.12),
+                      color,
+                      border: `1px solid ${alpha(color, 0.3)}`,
+                      fontWeight: 500,
+                      fontSize: '0.7rem',
+                      height: 20,
+                    }}
+                  />
+                );
+              })
+            }
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                label="Work Item Types"
+                helperText="Leave empty to show all types"
+              />
+            )}
+          />
 
           {/* Advanced Options */}
           <Accordion disableGutters>
@@ -379,7 +520,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
             variant="contained"
             fullWidth
             onClick={onRun}
-            disabled={!config.teamProject || !config.relationType}
+            disabled={!config.teamProject || (config.relationTypes.length === 0 && !config.queryId)}
             sx={{ mt: 0.5 }}
           >
             Load Hierarchy
@@ -398,7 +539,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               <IconButton
                 size="small"
                 onClick={onRun}
-                disabled={!config.teamProject || !config.relationType}
+                disabled={!config.teamProject || (config.relationTypes.length === 0 && !config.queryId)}
                 color="primary"
               >
                 <ChevronRightIcon />

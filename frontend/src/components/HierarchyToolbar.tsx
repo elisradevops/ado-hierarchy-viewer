@@ -15,8 +15,13 @@ import CheckIcon from '@mui/icons-material/Check';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import DensitySmallIcon from '@mui/icons-material/DensitySmall';
 import DensityMediumIcon from '@mui/icons-material/DensityMedium';
+import ViewColumnIcon from '@mui/icons-material/ViewColumn';
+import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
+import CheckBoxIcon from '@mui/icons-material/CheckBox';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
+import { COLUMN_DEFS } from '../constants/columns';
 import { useHierarchyStore } from '../state/hierarchyStore';
 import { AUTO_REFRESH_OPTIONS } from '../constants/ui';
 import { downloadCsv, flatRowsToCsv } from '../utils/exportCsv';
@@ -58,6 +63,16 @@ const AR_BUTTON_BASE_SX = {
   whiteSpace: 'nowrap',
 } as const;
 
+const AR_BUTTON_ACTIVE_SX = {
+  ...AR_BUTTON_BASE_SX,
+  color: 'primary.main',
+} as const;
+
+const AR_BUTTON_INACTIVE_SX = {
+  ...AR_BUTTON_BASE_SX,
+  color: 'text.secondary',
+} as const;
+
 interface HierarchyToolbarProps {
   rows: FlatRow[];
   totalRows: number;
@@ -73,13 +88,18 @@ export function HierarchyToolbar({
   onExpandAll,
   onCollapseAll,
 }: HierarchyToolbarProps): React.ReactElement {
-  const { filter, setFilter, autoRefreshMs, setAutoRefreshMs, density, setDensity } = useUiPrefsStore();
+  const { filter, setFilter, autoRefreshMs, setAutoRefreshMs, density, setDensity, hiddenCols, toggleCol, resetCols } = useUiPrefsStore();
   const rowsById = useHierarchyStore(s => s.rowsById);
   const facets = useMemo(() => getFacetValues(rowsById), [rowsById]);
   const [localText, setLocalText] = useState(filter.text);
   const debouncedText = useDebouncedValue(localText);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const [arAnchor, setArAnchor] = useState<HTMLElement | null>(null);
+  const [colAnchor, setColAnchor] = useState<HTMLElement | null>(null);
+
+  // Non-always columns — drives the Columns menu
+  const toggleableColumns = useMemo(() => COLUMN_DEFS.filter(c => !c.always), []);
 
   const currentArOpt = AUTO_REFRESH_OPTIONS.find(o => o.value === autoRefreshMs) ?? AUTO_REFRESH_OPTIONS[0];
   const arActive = autoRefreshMs > 0;
@@ -98,7 +118,7 @@ export function HierarchyToolbar({
     try {
       await copyToClipboard(flatRowsToTsv(rows));
       setCopySuccess(true);
-    } catch { /* ignore */ } finally {
+    } catch { setCopyError(true); } finally {
       isCopyingRef.current = false;
       setIsCopying(false);
     }
@@ -194,10 +214,7 @@ export function HierarchyToolbar({
             <AutorenewIcon sx={{ fontSize: '14px !important', color: arActive ? 'primary.main' : 'text.disabled' }} />
           }
           endIcon={<KeyboardArrowDownIcon sx={{ fontSize: '14px !important' }} />}
-          sx={{
-            ...AR_BUTTON_BASE_SX,
-            color: arActive ? 'primary.main' : 'text.secondary',
-          }}
+          sx={arActive ? AR_BUTTON_ACTIVE_SX : AR_BUTTON_INACTIVE_SX}
         >
           {`Auto-refresh: ${currentArOpt.label}`}
         </Button>
@@ -247,6 +264,44 @@ export function HierarchyToolbar({
           {density === 'compact' ? <DensitySmallIcon fontSize="small" /> : <DensityMediumIcon fontSize="small" />}
         </IconButton>
       </Tooltip>
+      <Tooltip title="Columns" disableHoverListener={Boolean(colAnchor)}>
+        <IconButton size="small" onClick={e => setColAnchor(e.currentTarget)}>
+          <ViewColumnIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Menu
+        anchorEl={colAnchor}
+        open={Boolean(colAnchor)}
+        onClose={() => setColAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Typography variant="caption" sx={{ px: 2, pt: 0.75, pb: 0.25, display: 'block', fontWeight: 600, color: 'text.secondary' }}>
+          Columns
+        </Typography>
+        <Divider sx={{ mb: 0.5 }} />
+        {toggleableColumns.map(col => {
+          const visible = !hiddenCols.includes(col.key);
+          return (
+            <MenuItem key={col.key} dense onClick={() => toggleCol(col.key)}>
+              <ListItemIcon sx={{ minWidth: 28 }}>
+                {visible
+                  ? <CheckBoxIcon fontSize="small" color="primary" />
+                  : <CheckBoxOutlineBlankIcon fontSize="small" />
+                }
+              </ListItemIcon>
+              {col.label}
+            </MenuItem>
+          );
+        })}
+        <Divider sx={{ mt: 0.5 }} />
+        <MenuItem dense onClick={() => { resetCols(); setColAnchor(null); }}>
+          <ListItemIcon sx={{ minWidth: 28 }}>
+            <RestartAltIcon fontSize="small" />
+          </ListItemIcon>
+          Reset to defaults
+        </MenuItem>
+      </Menu>
 
       {/* Copy success snackbar */}
       <Snackbar
@@ -257,6 +312,17 @@ export function HierarchyToolbar({
       >
         <Alert onClose={() => setCopySuccess(false)} severity="success" sx={{ width: '100%' }}>
           Copied to clipboard
+        </Alert>
+      </Snackbar>
+      {/* Copy error snackbar */}
+      <Snackbar
+        open={copyError}
+        autoHideDuration={3000}
+        onClose={() => setCopyError(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+      >
+        <Alert onClose={() => setCopyError(false)} severity="error" sx={{ width: '100%' }}>
+          Copy failed — check browser clipboard permissions
         </Alert>
       </Snackbar>
     </Box>

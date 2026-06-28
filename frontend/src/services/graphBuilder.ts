@@ -1,23 +1,62 @@
-import type { WorkItemRelation, AdjacencyMap, Direction } from '../types';
+import type { WorkItemRelation, AdjacencyMap, AdjacencyEdge } from '../types';
+
+/**
+ * Determine which rels are "primary spine" (forward direction or only-selected-direction)
+ * vs "ref" (opposite direction whose forward counterpart is also selected).
+ *
+ * Rules:
+ * - If a Forward type is selected, it's primary.
+ * - If a Reverse type is selected AND its Forward counterpart is also selected → it's a ref.
+ * - If a Reverse type is selected WITHOUT its Forward counterpart → it's primary (true reverse).
+ * - Non-directional types (no -Forward/-Reverse suffix) are always primary.
+ */
+function buildRefSet(selectedRels: ReadonlyArray<string>): Set<string> {
+  const selected = new Set(selectedRels);
+  const refs = new Set<string>();
+  for (const rel of selected) {
+    if (rel.endsWith('-Reverse')) {
+      const forwardCounterpart = rel.replace(/-Reverse$/, '-Forward');
+      if (selected.has(forwardCounterpart)) {
+        refs.add(rel);
+      }
+    }
+  }
+  return refs;
+}
 
 export function buildAdjacency(
   relations: ReadonlyArray<WorkItemRelation>,
-  direction: Direction,
+  selectedRels?: ReadonlyArray<string>,
 ): AdjacencyMap {
   const adjacency: AdjacencyMap = new Map();
+  const refRels = selectedRels ? buildRefSet(selectedRels) : new Set<string>();
+
+  // Dedup guard: "parentId-childId-rel" prevents duplicate edges
+  const seen = new Set<string>();
 
   for (const relation of relations) {
-    const { source, target } = relation;
+    const { source, target, rel } = relation;
     if (!source || !target) continue;
     if (!Number.isInteger(source.id) || !Number.isInteger(target.id)) continue;
 
-    const parentId = direction === 'forward' ? source.id : target.id;
-    const childId = direction === 'forward' ? target.id : source.id;
+    // No normalization flip — edges go as ADO returns them:
+    // Forward: source=parent, target=child (top-down)
+    // Reverse: source=child, target=parent (bottom-up when used as primary)
+    const parentId = source.id;
+    const childId = target.id;
 
     if (parentId === childId) continue; // drop self-loops
 
-    if (!adjacency.has(parentId)) adjacency.set(parentId, new Set());
-    adjacency.get(parentId)!.add(childId);
+    const edgeKey = `${parentId}-${childId}-${rel ?? ''}`;
+    if (seen.has(edgeKey)) continue;
+    seen.add(edgeKey);
+
+    const isRef = rel ? refRels.has(rel) : false;
+
+    const edge: AdjacencyEdge = { childId, rel: rel ?? 'unknown', isRef };
+
+    if (!adjacency.has(parentId)) adjacency.set(parentId, []);
+    adjacency.get(parentId)!.push(edge);
   }
 
   return adjacency;

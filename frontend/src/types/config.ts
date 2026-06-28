@@ -1,12 +1,10 @@
-import type { Direction } from './tree';
-
 export interface HierarchyConfig {
   tfsUrl: string;
   teamProject: string;
-  relationType: string;
-  direction: Direction;
+  relationTypes: string[];
   closedState: string;
   effortField: string;
+  queryId?: string;
 }
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
@@ -23,5 +21,4 @@ export interface ConnectionState {
 export interface AuthCtx {
   orgUrl: string;
   credential: string;
-  mode: ConnectionMode;
 }

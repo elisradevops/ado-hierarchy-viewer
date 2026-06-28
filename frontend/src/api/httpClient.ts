@@ -28,7 +28,7 @@ export async function withRetry<T>(
       const status = axios.isAxiosError(err) ? err.response?.status : undefined;
       if (!isRetryable(status)) throw err; // don't retry 4xx
       if (attempt < retries) {
-        if (signal?.aborted) throw new Error('Request aborted');
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         const jitter = 0.85 + Math.random() * 0.3;
         await delay(BASE_DELAY_MS * Math.pow(2, attempt) * jitter);
       }

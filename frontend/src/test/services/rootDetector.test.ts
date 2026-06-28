@@ -5,7 +5,7 @@ import type { AdjacencyMap } from '../../types';
 function makeAdjacency(entries: [number, number[]][]): AdjacencyMap {
   const map: AdjacencyMap = new Map();
   for (const [parent, children] of entries) {
-    map.set(parent, new Set(children));
+    map.set(parent, children.map(childId => ({ childId, rel: 'System.LinkTypes.Hierarchy-Forward', isRef: false })));
   }
   return map;
 }

@@ -154,7 +154,7 @@ export async function fetchWorkItemTypeMetaDirect(
             const k = s.name.toLowerCase();
             if (!stateColors[k] && s.color) stateColors[k] = `#${s.color}`;
           }
-        } catch { /* non-fatal — individual type failure, hardcoded fallbacks remain */ }
+        } catch (stateErr) { console.warn('fetchWorkItemTypeMetaDirect: state fetch failed for', t.name, stateErr); }
       }));
     }
 
@@ -178,13 +178,14 @@ export async function fetchRelationsDirect(
   orgUrl: string,
   credential: string,
   project: string,
-  relationType: string,
+  relationTypes: string[],
   signal?: AbortSignal
 ): Promise<WorkItemRelation[]> {
   const url = `${normalizeUrl(orgUrl)}${encodeURIComponent(project)}/_apis/wit/wiql`;
   const headers = makeAdoHeaders(credential);
+  const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
   const wiqlQuery = {
-    query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] = '${relationType}' MODE (MustContain)`,
+    query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause}) MODE (MustContain)`,
   };
 
   try {
@@ -220,7 +221,28 @@ const KNOWN_FIELDS = new Set([
   'System.Title',
   'System.State',
   'System.TeamProject',
+  'System.AssignedTo',
+  'System.AreaPath',
+  'System.IterationPath',
+  'System.Tags',
+  'Microsoft.VSTS.Common.Priority',
+  'Microsoft.VSTS.Scheduling.StoryPoints',
+  'Microsoft.VSTS.Scheduling.RemainingWork',
+  'Microsoft.VSTS.Scheduling.OriginalEstimate',
 ]);
+
+const numOrNull = (f: Record<string, unknown>, key: string): number | null => {
+  const v = f[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+};
+const strOrUndef = (f: Record<string, unknown>, key: string): string | undefined => {
+  const v = f[key];
+  if (v == null) return undefined;
+  if (typeof v === 'object' && v !== null && 'displayName' in v) {
+    return String((v as { displayName: unknown }).displayName ?? '');
+  }
+  return String(v);
+};
 
 async function fetchWorkItemsBatchDirect(
   orgUrl: string,
@@ -228,6 +250,7 @@ async function fetchWorkItemsBatchDirect(
   project: string,
   ids: number[],
   fields: string[],
+  effortField?: string,
   signal?: AbortSignal
 ): Promise<WorkItem[]> {
   if (ids.length === 0) return [];
@@ -257,16 +280,11 @@ async function fetchWorkItemsBatchDirect(
       signal
     );
 
-    // Effort-field heuristic — ported verbatim from HierarchyService.ts:126-153
     const items = (result.value ?? []).map((raw): WorkItem => {
       const f = raw.fields;
-      let effort: number | null = null;
-      for (const [fieldName, value] of Object.entries(f)) {
-        if (!KNOWN_FIELDS.has(fieldName) && typeof value === 'number' && Number.isFinite(value)) {
-          effort = value;
-          break;
-        }
-      }
+      const resolvedEffortField = effortField ?? fields.find(fn => !KNOWN_FIELDS.has(fn)) ?? null;
+      const effortRaw = resolvedEffortField != null ? f[resolvedEffortField] : undefined;
+      const effort = typeof effortRaw === 'number' && Number.isFinite(effortRaw) ? effortRaw : null;
       return {
         id: raw.id,
         type: String(f['System.WorkItemType'] ?? ''),
@@ -274,12 +292,70 @@ async function fetchWorkItemsBatchDirect(
         state: String(f['System.State'] ?? ''),
         teamProject: String(f['System.TeamProject'] ?? ''),
         effort,
+        assignedTo: strOrUndef(f, 'System.AssignedTo'),
+        areaPath: strOrUndef(f, 'System.AreaPath'),
+        iterationPath: strOrUndef(f, 'System.IterationPath'),
+        priority: numOrNull(f, 'Microsoft.VSTS.Common.Priority'),
+        tags: strOrUndef(f, 'System.Tags'),
+        storyPoints: numOrNull(f, 'Microsoft.VSTS.Scheduling.StoryPoints'),
+        remainingWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.RemainingWork'),
+        originalEstimate: numOrNull(f, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
         url: raw.url,
       };
     });
     allItems.push(...items);
   }
   return allItems;
+}
+
+// ─── Query root IDs fetch ──────────────────────────────────────────────────
+
+export async function fetchQueryRootIdsDirect(
+  orgUrl: string,
+  credential: string,
+  project: string,
+  queryId: string,
+  signal?: AbortSignal
+): Promise<number[]> {
+  const url = `${normalizeUrl(orgUrl)}${encodeURIComponent(project)}/_apis/wit/wiql/${encodeURIComponent(queryId)}`;
+  const headers = makeAdoHeaders(credential);
+
+  try {
+    const result = await withRetry(
+      () => withApiVersionFallback(apiVersion =>
+        axios.get<{
+          queryType: string;
+          workItems?: Array<{ id: number }>;
+          workItemRelations?: Array<{ source: { id: number } | null; target: { id: number } | null }>;
+        }>(url, {
+          headers,
+          signal,
+          params: apiVersion ? { 'api-version': apiVersion } : {},
+        }).then(r => r.data)
+      ),
+      MAX_RETRIES,
+      signal
+    );
+
+    let rootIds: number[] = [];
+    if (result.queryType === 'flat' && Array.isArray(result.workItems)) {
+      rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
+    } else if (result.queryType === 'tree' && Array.isArray(result.workItemRelations)) {
+      const childIds = new Set(
+        result.workItemRelations
+          .filter(r => r.target && Number.isInteger(r.target.id))
+          .map(r => r.target!.id)
+      );
+      const seen = new Set<number>();
+      rootIds = result.workItemRelations
+        .filter(r => r.source && Number.isInteger(r.source.id) && !childIds.has(r.source.id))
+        .map(r => r.source!.id)
+        .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
+    }
+    return rootIds;
+  } catch (err) {
+    return handleAdoError(err);
+  }
 }
 
 // ─── Composite hierarchy fetch ─────────────────────────────────────────────
@@ -290,20 +366,29 @@ export async function fetchHierarchyDirect(
   orgUrl: string,
   credential: string,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[] }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[] }> {
+  // Fetch query root IDs if queryId provided
+  let rootIds: number[] | undefined;
+  if (config.queryId) {
+    rootIds = await fetchQueryRootIdsDirect(orgUrl, credential, config.teamProject, config.queryId, signal);
+  }
+
   const relations = await fetchRelationsDirect(
     orgUrl,
     credential,
     config.teamProject,
-    config.relationType,
+    config.relationTypes,
     signal
   );
 
-  // Dedupe all source + target IDs (mirrors HierarchyController.ts:96-101)
+  // Dedupe all source + target IDs, union with rootIds
   const idSet = new Set<number>();
   for (const r of relations) {
     if (r.source) idSet.add(r.source.id);
     if (r.target) idSet.add(r.target.id);
+  }
+  if (rootIds) {
+    for (const id of rootIds) idSet.add(id);
   }
 
   const fields = buildWiFields(config.effortField);
@@ -313,8 +398,9 @@ export async function fetchHierarchyDirect(
     config.teamProject,
     [...idSet],
     fields,
+    config.effortField,
     signal
   );
 
-  return { workItemRelations: relations, workItems };
+  return { workItemRelations: relations, workItems, rootIds };
 }

@@ -10,7 +10,13 @@ export function errorHandler(
 ): void {
   if (axios.isAxiosError(err)) {
     const status = err.response?.status ?? 502;
-    const message = err.response?.data?.message ?? err.message ?? 'ADO request failed';
+    const d = err.response?.data;
+    const message = (typeof d === 'object' && d !== null
+      ? (d as Record<string, unknown>).message
+        ?? ((d as Record<string, unknown>).value as Array<Record<string, unknown>> | undefined)?.[0]?.message
+      : typeof d === 'string' ? d : undefined)
+      ?? err.message
+      ?? 'ADO request failed';
     logger.error('ADO proxy error', { status, message });
     res.status(status).json({ error: message });
     return;

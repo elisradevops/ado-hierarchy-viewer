@@ -33,6 +33,26 @@ interface ProgressBarProps {
   value: number; // 0–100
 }
 
+interface TimeProgressBarProps {
+  completed: number;
+  remaining: number;
+}
+
+export const TimeProgressBar = React.memo(function TimeProgressBar({ completed, remaining }: TimeProgressBarProps): React.ReactElement {
+  const total = (Number.isFinite(completed) ? completed : 0) + (Number.isFinite(remaining) ? remaining : 0);
+  const pct = total > 0 ? Math.min(100, ((Number.isFinite(completed) ? completed : 0) / total) * 100) : 0;
+  const barColor = getBarColor(pct);
+  const label = total > 0 ? `${Number.isFinite(remaining) ? remaining : 0}h left` : '—';
+  return (
+    <Box sx={CONTAINER_SX}>
+      <Box sx={BAR_TRACK_SX}>
+        <Box sx={{ position: 'absolute', top: 0, left: 0, height: '100%', width: `${pct}%`, bgcolor: barColor, borderRadius: 3, transition: 'width 0.3s ease' }} />
+      </Box>
+      <Typography sx={LABEL_SX}>{label}</Typography>
+    </Box>
+  );
+});
+
 export const ProgressBar = React.memo(function ProgressBar({ value }: ProgressBarProps): React.ReactElement {
   const display = safeToFixed(value, 1);
   const clamped = Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));

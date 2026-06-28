@@ -10,8 +10,7 @@ vi.mock('../../state/configStore', () => ({
     config: {
       tfsUrl: '',
       teamProject: '',
-      relationType: 'System.LinkTypes.Hierarchy-Forward',
-      direction: 'forward',
+      relationTypes: ['System.LinkTypes.Hierarchy-Forward'],
       closedState: 'Closed',
       effortField: 'Microsoft.VSTS.Scheduling.OriginalEstimate',
     },

@@ -3,7 +3,8 @@ export const DEBOUNCE_MS = 250;
 // Shared CSS Grid template for the hierarchy table header AND every data row.
 // Title column fills remaining space; all metadata columns are fixed px.
 // Must be kept in sync between HierarchyTreeTable (header) and TreeRow (rows).
-export const GRID_COLS = 'minmax(0, 1fr) 120px 110px 165px 90px 110px';
+// Title | Type | State | AssignedTo | AreaPath | IterationPath | StoryPoints | RemainingWork | OrigEstimate | Priority | Tags | Progress | Effort | TotalEffort
+export const GRID_COLS = 'minmax(0, 1fr) 120px 110px 140px 180px 180px 100px 100px 100px 80px 100px 165px 90px 110px';
 
 export const ROW_HEIGHT = { comfortable: 48, compact: 36 } as const;
 

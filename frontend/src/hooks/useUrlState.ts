@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { useConfigStore } from '../state/configStore';
-import type { HierarchyConfig, Direction } from '../types';
+import type { HierarchyConfig } from '../types';
 
 const PARAM_KEYS: Array<keyof HierarchyConfig> = [
-  'tfsUrl', 'teamProject', 'relationType', 'direction', 'closedState', 'effortField',
+  'tfsUrl', 'teamProject', 'relationTypes', 'closedState', 'effortField',
 ];
 
 export function useUrlState(): void {
@@ -23,10 +23,9 @@ export function useUrlState(): void {
     for (const key of PARAM_KEYS) {
       const value = params.get(key);
       if (value !== null && value !== '') {
-        if (key === 'direction') {
-          if (value === 'forward' || value === 'reverse') {
-            partial.direction = value as Direction;
-          }
+        if (key === 'relationTypes') {
+          const parsed = value.split(',').filter(Boolean);
+          if (parsed.length > 0) partial.relationTypes = parsed;
         } else {
           (partial as Record<string, string>)[key] = value;
         }

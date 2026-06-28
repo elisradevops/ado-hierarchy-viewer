@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Chip, Typography, alpha } from '@mui/material';
 import type { SummaryStats } from '../selectors/summaryStats';
 import { getStateDotColor } from '../theme/stateDot';
@@ -63,8 +63,7 @@ const CHIP_WRAP_SX = {
   gap: 0.5,
 } as const;
 
-function buildTypeChipSx(type: string, color: string) {
-  void type;
+function buildTypeChipSx(color: string) {
   return {
     fontSize: '0.65rem',
     height: 18,
@@ -108,6 +107,26 @@ export const HierarchySummary = React.memo(function HierarchySummary({
   const progressPct = Number.isFinite(overallProgressPct) ? overallProgressPct : 0;
   const clamped = Math.min(100, Math.max(0, progressPct));
 
+  const typeChipSxMap = useMemo(
+    () => Object.fromEntries(
+      Object.keys(byType).map(type => {
+        const color = apiTypeColors[type] ?? TYPE_COLORS[type] ?? '#94A3B8';
+        return [type, buildTypeChipSx(color)];
+      })
+    ),
+    [byType, apiTypeColors]
+  );
+
+  const stateChipSxMap = useMemo(
+    () => Object.fromEntries(
+      Object.entries(byState).map(([state]) => {
+        const color = apiStateColors[state.toLowerCase()] ?? getStateDotColor(state);
+        return [state, buildStateChipSx(color)];
+      })
+    ),
+    [byState, apiStateColors]
+  );
+
   return (
     <Box sx={STRIP_SX}>
       <Typography sx={SECTION_LABEL_SX}>Summary</Typography>
@@ -133,18 +152,15 @@ export const HierarchySummary = React.memo(function HierarchySummary({
       {Object.keys(byType).length > 0 && (
         <Box>
           <Box sx={CHIP_WRAP_SX}>
-            {Object.entries(byType).map(([type, count]) => {
-              const color = apiTypeColors[type] ?? TYPE_COLORS[type] ?? '#94A3B8';
-              return (
+            {Object.entries(byType).map(([type, count]) => (
                 <Chip
                   key={type}
                   label={`${type} ${count}`}
                   size="small"
-                  sx={buildTypeChipSx(type, color)}
+                  sx={typeChipSxMap[type]}
                   onClick={onFilterByType ? () => onFilterByType(type) : undefined}
                 />
-              );
-            })}
+            ))}
           </Box>
         </Box>
       )}
@@ -152,18 +168,15 @@ export const HierarchySummary = React.memo(function HierarchySummary({
       {/* States */}
       {Object.keys(byState).length > 0 && (
         <Box sx={CHIP_WRAP_SX}>
-          {Object.entries(byState).map(([state, count]) => {
-            const color = apiStateColors[state.toLowerCase()] ?? getStateDotColor(state);
-            return (
+          {Object.entries(byState).map(([state, count]) => (
               <Chip
                 key={state}
                 label={`${state} ${count}`}
                 size="small"
-                sx={buildStateChipSx(color)}
+                sx={stateChipSxMap[state]}
                 onClick={onFilterByState ? () => onFilterByState(state) : undefined}
               />
-            );
-          })}
+          ))}
         </Box>
       )}
     </Box>

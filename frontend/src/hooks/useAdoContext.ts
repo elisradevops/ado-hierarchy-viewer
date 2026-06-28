@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { initAdoContext, type AdoContext } from '../adoSdk';
 import { useConnectionStore } from '../state/connectionStore';
+import { useConfigStore } from '../state/configStore';
 import { normalizeToBearerHeader } from '../utils/tokenUtils';
 
 export interface UseAdoContextResult {
@@ -16,6 +17,7 @@ export function useAdoContext(): UseAdoContextResult {
   const [error, setError] = useState<string | null>(null);
   const [sdk, setSdk] = useState<unknown | null>(null);
   const connectExtension = useConnectionStore(s => s.connectExtension);
+  const setConfig = useConfigStore(s => s.setConfig);
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -26,6 +28,9 @@ export function useAdoContext(): UseAdoContextResult {
         if (ctx.isAdo && ctx.accessToken) {
           const bearerToken = normalizeToBearerHeader(ctx.accessToken);
           connectExtension(ctx.collectionUri, bearerToken);
+          if (ctx.project) {
+            setConfig({ teamProject: ctx.project });
+          }
         }
         setSdk(ctx.sdk ?? null);
         setReady(true);

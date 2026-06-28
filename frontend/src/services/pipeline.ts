@@ -4,14 +4,14 @@ import { findRoots } from './rootDetector';
 import { buildTree } from './treeBuilder';
 
 export function buildHierarchy(input: BuildHierarchyInput): BuildHierarchyResult {
-  const { relations, items, direction, closedState } = input;
+  const { relations, items, closedState } = input;
 
   const itemsById: Record<number, WorkItem> = Object.fromEntries(
     items.map(item => [item.id, item]),
   );
 
-  const adjacency = buildAdjacency(relations, direction);
-  const rootIds = findRoots(adjacency);
+  const adjacency = buildAdjacency(relations, input.selectedRels);
+  const rootIds = input.rootIds ?? findRoots(adjacency);
 
   const roots = rootIds
     .map(id => buildTree(id, adjacency, itemsById, closedState))
