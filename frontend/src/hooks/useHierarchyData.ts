@@ -23,7 +23,7 @@ export function useHierarchyData(): {
   const { config } = useConfigStore();
 
   const loadHierarchy = useCallback((): void => {
-    if (!orgUrl || !credential || !config.teamProject || (config.relationTypes.length === 0 && !config.queryId)) return;
+    if (!orgUrl || !credential || !config.teamProject || !config.queryId) return;
 
     // Cancel any in-flight prior request — signal.aborted on the OLD controller
     // becomes the per-call stale guard (closure-captured, never reset by a new call).

@@ -1,5 +1,7 @@
 import type { FlatRow } from '../types';
 
+const EMPTY_ANCESTORS: ReadonlySet<number> = new Set();
+
 export type SortCol = 'id' | 'type' | 'title' | 'state' | 'progressPct'
   | 'assignedTo' | 'areaPath' | 'iterationPath' | 'storyPoints' | 'remainingWork'
   | 'originalEstimate' | 'completedWork' | 'priority' | 'tags';
@@ -49,16 +51,27 @@ export function sortRows(rows: FlatRow[], col: SortCol, dir: 'asc' | 'desc'): Fl
   }
 
   // Reconstruct via iterative DFS — avoids call-stack overflow on deep trees.
+  // Each stack entry carries its own ancestor path: treeBuilder allows the same work
+  // item to appear as multiple FlatRows (diamond/multi-parent DAGs), keyed only by
+  // node.id with no per-instance identity. Two branch-copies of a bidirectionally
+  // linked pair (X under Y in one branch, Y under X in another) collapse into a cycle
+  // when reconstructed purely from parentId/node.id — without this per-path guard the
+  // loop pushes the same ids forever until `result` exceeds the max array length.
   const result: FlatRow[] = [];
-  const stack: FlatRow[] = [];
+  const stack: Array<{ row: FlatRow; ancestors: ReadonlySet<number> }> = [];
   const roots = byParent.get(null) ?? [];
-  for (let i = roots.length - 1; i >= 0; i--) stack.push(roots[i]);
+  for (let i = roots.length - 1; i >= 0; i--) stack.push({ row: roots[i], ancestors: EMPTY_ANCESTORS });
   while (stack.length > 0) {
-    const row = stack.pop()!;
+    const { row, ancestors } = stack.pop()!;
     result.push(row);
     if (row.hasChildren) {
       const kids = byParent.get(row.node.id) ?? [];
-      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      const nextAncestors = new Set(ancestors);
+      nextAncestors.add(row.node.id);
+      for (let i = kids.length - 1; i >= 0; i--) {
+        if (nextAncestors.has(kids[i].node.id)) continue; // cross-branch cycle — drop, don't revisit
+        stack.push({ row: kids[i], ancestors: nextAncestors });
+      }
     }
   }
   return result;

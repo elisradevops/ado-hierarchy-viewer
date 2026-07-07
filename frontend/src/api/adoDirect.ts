@@ -140,24 +140,52 @@ export async function fetchRelationsDirect(
   _credential: string,
   project: string,
   relationTypes: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** When provided, restricts the link scan to edges originating from these ids —
+   * used to extend outward from the query's baseline instead of scanning the whole project. */
+  sourceIds?: number[]
 ): Promise<WorkItemRelation[]> {
   if (signal?.aborted || relationTypes.length === 0) return [];
   try {
     const client = getClient(WorkItemTrackingRestClient);
     const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
-    const wiql = {
-      query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause}) MODE (MustContain)`,
-    };
-    const result = await client.queryByWiql(wiql, project);
 
-    return (result.workItemRelations ?? [])
-      .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
-      .map(r => ({
-        rel: r.rel ?? null,
-        source: r.source ? { id: r.source.id } : null,
-        target: r.target ? { id: r.target.id } : null,
-      })) as WorkItemRelation[];
+    // A large seed/frontier set inlined whole into one WIQL `IN (...)` clause can exceed
+    // ADO's query length/complexity limit and 400. Chunk it the same way batch work-item
+    // fetches already do (BATCH_SIZE) and issue the chunks concurrently.
+    const idChunks: number[][] = [];
+    if (sourceIds && sourceIds.length > 0) {
+      for (let i = 0; i < sourceIds.length; i += BATCH_SIZE) {
+        idChunks.push(sourceIds.slice(i, i + BATCH_SIZE));
+      }
+    } else {
+      idChunks.push([]); // no id filter — single unscoped query
+    }
+
+    const runQuery = (ids: number[]) => {
+      const idFilter = ids.length > 0 ? ` AND [Source].[System.Id] IN (${ids.join(',')})` : '';
+      const wiql = {
+        query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause})${idFilter} MODE (MustContain)`,
+      };
+      return client.queryByWiql(wiql, project);
+    };
+
+    const chunkResults = await mapWithConcurrency(idChunks, BATCH_FETCH_CONCURRENCY, runQuery);
+
+    // Filter null/non-integer pairs, dedupe across chunks (source ids never overlap
+    // between chunks, but guard anyway since this feeds a Map keyed by pair elsewhere).
+    const seenPairs = new Set<string>();
+    const relations: WorkItemRelation[] = [];
+    for (const result of chunkResults) {
+      for (const r of result.workItemRelations ?? []) {
+        if (!r.source || !r.target || !Number.isInteger(r.source.id) || !Number.isInteger(r.target.id)) continue;
+        const pairKey = `${r.source.id}-${r.target.id}`;
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        relations.push({ rel: r.rel ?? null, source: { id: r.source.id }, target: { id: r.target.id } });
+      }
+    }
+    return relations;
   } catch (err) {
     return handleAdoError(err);
   }
@@ -417,15 +445,13 @@ export async function fetchHierarchyDirect(
   _credential: string,
   signal?: AbortSignal
 ): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null }> {
-  let rootIds: number[] | undefined;
-  let queryRelations: WorkItemRelation[] = [];
-  let matchedIds: number[] | null = null;
-  if (config.queryId) {
-    const q = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
-    rootIds = q.rootIds;
-    queryRelations = q.queryRelations;
-    matchedIds = q.matchedIds;
-  }
+  // The query is always the baseline — link types only extend outward from the work
+  // items the query actually returned, they never seed the hierarchy on their own.
+  if (!config.queryId) return { workItemRelations: [], workItems: [], rootIds: [], matchedIds: null };
+  const q = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
+  const rootIds = q.rootIds;
+  const queryRelations = q.queryRelations;
+  const matchedIds = q.matchedIds;
 
   // N4: abort checks between sequential awaits to skip unnecessary batch fetches after cancel
   if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null };
@@ -435,23 +461,44 @@ export async function fetchHierarchyDirect(
   const completedWork = 'Microsoft.VSTS.Scheduling.CompletedWork';
   const fields = baseFields.includes(completedWork) ? baseFields : [...baseFields, completedWork];
 
-  // Cross-project recursive link-follow: start from config.teamProject, and whenever a
-  // newly resolved work item belongs to a project we haven't queried yet, fetch that
-  // project's own links too. Bounded by MAX_PROJECT_HOPS + shrinking frontier.
+  // Seed = every node the query touched (roots + all relation endpoints).
+  const seedIds = new Set<number>(rootIds);
+  for (const r of queryRelations) {
+    seedIds.add(r.source!.id);
+    seedIds.add(r.target!.id);
+  }
+
+  // Cross-project recursive link-follow, scoped to ids reachable from the query's seed:
+  // each hop only asks ADO for links whose Source.Id is in the current frontier, so link
+  // types extend the query's tree instead of pulling in the whole project's link graph.
+  // Bounded by MAX_PROJECT_HOPS + shrinking frontier.
   const linkRelationsByPair = new Map<string, WorkItemRelation>();
   const resolvedItemsById = new Map<number, WorkItem>();
-  const knownProjects = new Set<string>([config.teamProject]);
+  const visitedIds = new Set<number>(seedIds);
 
   // Gap #3: skip WIQL when no relation types to avoid empty IN () → ADO 400
-  if (config.relationTypes.length > 0) {
-    let frontier = [config.teamProject];
-    for (let hop = 0; hop < MAX_PROJECT_HOPS && frontier.length > 0 && !signal?.aborted; hop++) {
+  if (config.relationTypes.length > 0 && seedIds.size > 0) {
+    // Resolve seed items up front and bucket the initial frontier by their REAL team
+    // project — a cross-project (tree/oneHop) query can seed ids that don't live in
+    // config.teamProject, and WIQL's [Source].[System.TeamProject] filter would silently
+    // drop their links if hop 0 assumed they were all in config.teamProject.
+    const seedItems = await fetchWorkItemsBatchDirect(config.teamProject, [...seedIds], fields, effortField, signal);
+    for (const item of seedItems) resolvedItemsById.set(item.id, item);
+    let frontierByProject = new Map<string, number[]>();
+    for (const item of seedItems) {
+      if (!item.teamProject) continue;
+      const bucket = frontierByProject.get(item.teamProject);
+      if (bucket) bucket.push(item.id);
+      else frontierByProject.set(item.teamProject, [item.id]);
+    }
+    for (let hop = 0; hop < MAX_PROJECT_HOPS && frontierByProject.size > 0 && !signal?.aborted; hop++) {
+      const entries = [...frontierByProject.entries()];
       // Bounded the same way as fetchWorkItemsBatchDirect above — an unusually wide
       // frontier (many newly-discovered projects in one hop) shouldn't fire unlimited
       // concurrent requests. fetchRelationsDirect already self-guards on signal.aborted
       // at entry, so no extra abort plumbing is needed here.
-      const batches = await mapWithConcurrency(frontier, BATCH_FETCH_CONCURRENCY, p =>
-        fetchRelationsDirect('', '', p, config.relationTypes, signal)
+      const batches = await mapWithConcurrency(entries, BATCH_FETCH_CONCURRENCY, ([p, ids]) =>
+        fetchRelationsDirect('', '', p, config.relationTypes, signal, ids)
       );
 
       const idsToResolve = new Set<number>();
@@ -462,23 +509,23 @@ export async function fetchHierarchyDirect(
           if (!linkRelationsByPair.has(pairKey)) {
             linkRelationsByPair.set(pairKey, { ...r, origin: 'link' });
           }
-          if (!resolvedItemsById.has(r.source.id)) idsToResolve.add(r.source.id);
-          if (!resolvedItemsById.has(r.target.id)) idsToResolve.add(r.target.id);
+          if (!visitedIds.has(r.target.id)) idsToResolve.add(r.target.id);
         }
       }
 
       if (idsToResolve.size === 0 || signal?.aborted) break;
+      for (const id of idsToResolve) visitedIds.add(id);
 
       const newItems = await fetchWorkItemsBatchDirect(config.teamProject, [...idsToResolve], fields, effortField, signal);
-      const discoveredProjects = new Set<string>();
+      const nextFrontierByProject = new Map<string, number[]>();
       for (const item of newItems) {
         resolvedItemsById.set(item.id, item);
-        if (item.teamProject && !knownProjects.has(item.teamProject)) {
-          knownProjects.add(item.teamProject);
-          discoveredProjects.add(item.teamProject);
-        }
+        if (!item.teamProject) continue;
+        const bucket = nextFrontierByProject.get(item.teamProject);
+        if (bucket) bucket.push(item.id);
+        else nextFrontierByProject.set(item.teamProject, [item.id]);
       }
-      frontier = [...discoveredProjects];
+      frontierByProject = nextFrontierByProject;
     }
   }
 
@@ -496,9 +543,7 @@ export async function fetchHierarchyDirect(
     if (r.source) idSet.add(r.source.id);
     if (r.target) idSet.add(r.target.id);
   }
-  if (rootIds) {
-    for (const id of rootIds) idSet.add(id);
-  }
+  for (const id of rootIds) idSet.add(id);
 
   const missingIds = [...idSet].filter(id => !resolvedItemsById.has(id));
   const missingItems = missingIds.length > 0

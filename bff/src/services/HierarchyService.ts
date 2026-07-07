@@ -174,36 +174,61 @@ export async function fetchLinks(
   client: AdoClient,
   orgUrl: string,
   project: string,
-  relationTypes: string[]
+  relationTypes: string[],
+  /** When provided, restricts the link scan to edges originating from these ids —
+   * used to extend outward from the query's baseline instead of scanning the whole project. */
+  sourceIds?: number[]
 ): Promise<WorkItemRelation[]> {
-  const key = cacheKey(orgUrl, project, [...relationTypes].sort().join(','));
+  const key = cacheKeyFromParts(
+    [orgUrl, project, [...relationTypes].sort().join(',')],
+    sourceIds ? [...sourceIds].sort((a, b) => a - b) : []
+  );
   const cached = cacheGet<WorkItemRelation[]>(key);
   if (cached) return cached;
 
   const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
   const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/wiql`;
-
   const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
-  const wiqlQuery = {
-    // No TOP clause — ADO rejects TOP on WorkItemLinks queries; the server enforces its own cap.
-    query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause}) MODE (MustContain)`,
-  };
 
-  const result = await withApiVersionFallback(async (apiVersion) => {
-    const response = await client.post<{ workItemRelations: WorkItemRelation[] }>(
-      url,
-      wiqlQuery,
-      apiVersion || undefined
-    );
-    return response;
+  // A large seed/frontier set inlined whole into one WIQL `IN (...)` clause can exceed
+  // ADO's query length/complexity limit and 400. Chunk it the same way batch work-item
+  // fetches already do (config.ADO_BATCH_SIZE) and issue the chunks concurrently.
+  const idChunks: number[][] = [];
+  if (sourceIds && sourceIds.length > 0) {
+    for (let i = 0; i < sourceIds.length; i += config.ADO_BATCH_SIZE) {
+      idChunks.push(sourceIds.slice(i, i + config.ADO_BATCH_SIZE));
+    }
+  } else {
+    idChunks.push([]); // no id filter — single unscoped query
+  }
+
+  const runQuery = (ids: number[]) => withApiVersionFallback(async (apiVersion) => {
+    const idFilter = ids.length > 0 ? ` AND [Source].[System.Id] IN (${ids.join(',')})` : '';
+    const wiqlQuery = {
+      // No TOP clause — ADO rejects TOP on WorkItemLinks queries; the server enforces its own cap.
+      query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause})${idFilter} MODE (MustContain)`,
+    };
+    return client.post<{ workItemRelations: WorkItemRelation[] }>(url, wiqlQuery, apiVersion || undefined);
   });
 
-  // Filter null/non-integer pairs
-  const relations: WorkItemRelation[] = (result.workItemRelations ?? []).filter(r => {
-    if (!r.source || !r.target) return false;
-    if (!Number.isInteger(r.source.id) || !Number.isInteger(r.target.id)) return false;
-    return true;
-  });
+  const chunkResults = await Promise.all(
+    idChunks.map(ids => adoConcurrencyLimit(() => runQuery(ids)))
+  );
+
+  // Filter null/non-integer pairs, dedupe across chunks (a pair could theoretically
+  // recur if source ids overlap between chunks, though chunking itself never overlaps).
+  const seenPairs = new Set<string>();
+  const relations: WorkItemRelation[] = [];
+  for (const result of chunkResults) {
+    for (const r of result.workItemRelations ?? []) {
+      if (!r.source || !r.target) continue;
+      if (!Number.isInteger(r.source.id) || !Number.isInteger(r.target.id)) continue;
+      const pairKey = `${r.source.id}-${r.target.id}`;
+      if (seenPairs.has(pairKey)) continue;
+      seenPairs.add(pairKey);
+      relations.push(r);
+    }
+  }
 
   cacheSet(key, relations);
   return relations;

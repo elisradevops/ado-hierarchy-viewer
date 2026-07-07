@@ -347,12 +347,13 @@ describe('fetchHierarchyDirect', () => {
   });
 
   it('gap #4: uses DEFAULT_EFFORT_FIELD when effortField is empty', async () => {
+    witStub.queryById.mockResolvedValue({ queryType: 1, workItems: [{ id: 1 }] }); // Flat query, root id 1
     witStub.queryByWiql.mockResolvedValue({
       workItemRelations: [{ rel: 'Child', source: { id: 1 }, target: { id: 2 } }],
     });
     witStub.getWorkItemsBatch.mockResolvedValue([]);
     const config = {
-      teamProject: 'Proj', relationTypes: ['Child'], queryId: '',
+      teamProject: 'Proj', relationTypes: ['Child'], queryId: 'q-guid',
       effortField: '', closedState: 'Closed', topLevelType: '',
     };
     await fetchHierarchyDirect(config, '', '');
@@ -361,12 +362,13 @@ describe('fetchHierarchyDirect', () => {
   });
 
   it('gap #5: includes CompletedWork in the fields list', async () => {
+    witStub.queryById.mockResolvedValue({ queryType: 1, workItems: [{ id: 1 }] }); // Flat query, root id 1
     witStub.queryByWiql.mockResolvedValue({
       workItemRelations: [{ rel: 'Child', source: { id: 1 }, target: { id: 2 } }],
     });
     witStub.getWorkItemsBatch.mockResolvedValue([]);
     const config = {
-      teamProject: 'Proj', relationTypes: ['Child'], queryId: '',
+      teamProject: 'Proj', relationTypes: ['Child'], queryId: 'q-guid',
       effortField: 'Microsoft.VSTS.Scheduling.OriginalEstimate', closedState: 'Closed', topLevelType: '',
     };
     await fetchHierarchyDirect(config, '', '');
@@ -407,6 +409,7 @@ describe('fetchHierarchyDirect', () => {
   });
 
   it('follows links across projects when a discovered work item belongs to a different project', async () => {
+    witStub.queryById.mockResolvedValue({ queryType: 1, workItems: [{ id: 1 }] }); // Flat query, root id 1
     // Hop 1: 'Proj' has a link from item 1 (Proj) to item 2 (OtherProj)
     witStub.queryByWiql
       .mockResolvedValueOnce({
@@ -415,26 +418,56 @@ describe('fetchHierarchyDirect', () => {
       // Hop 2: OtherProj's own outgoing link, from item 2 to item 3 (also OtherProj)
       .mockResolvedValueOnce({
         workItemRelations: [{ rel: 'X', source: { id: 2 }, target: { id: 3 } }],
-      });
+      })
+      // Hop 3: id-scoped BFS asks once more from item 3 before finding nothing new and stopping.
+      .mockResolvedValue({ workItemRelations: [] });
 
-    witStub.getWorkItemsBatch
-      .mockResolvedValueOnce([
-        { id: 1, fields: { 'System.WorkItemType': 'Epic', 'System.Title': 'E', 'System.State': 'Active', 'System.TeamProject': 'Proj' } },
-        { id: 2, fields: { 'System.WorkItemType': 'Feature', 'System.Title': 'F', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
-      ])
-      .mockResolvedValueOnce([
-        { id: 3, fields: { 'System.WorkItemType': 'Task', 'System.Title': 'T', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
-      ]);
+    // Only returns items for ids actually requested — mirrors real getWorkItemsBatch and
+    // avoids leaking the already-visited seed id (1) back into the next hop's frontier.
+    const itemsById: Record<number, { id: number; fields: Record<string, string> }> = {
+      1: { id: 1, fields: { 'System.WorkItemType': 'Epic', 'System.Title': 'E', 'System.State': 'Active', 'System.TeamProject': 'Proj' } },
+      2: { id: 2, fields: { 'System.WorkItemType': 'Feature', 'System.Title': 'F', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
+      3: { id: 3, fields: { 'System.WorkItemType': 'Task', 'System.Title': 'T', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
+    };
+    witStub.getWorkItemsBatch.mockImplementation(async (req: { ids: number[] }) =>
+      req.ids.map(id => itemsById[id])
+    );
 
     const config = {
-      teamProject: 'Proj', relationTypes: ['X'], queryId: '',
+      teamProject: 'Proj', relationTypes: ['X'], queryId: 'q-guid',
       effortField: '', closedState: 'Closed', topLevelType: '',
     };
     const result = await fetchHierarchyDirect(config, '', '');
 
-    expect(witStub.queryByWiql).toHaveBeenCalledTimes(2);
+    // Id-scoped BFS: hop1 (seed [1]) -> discovers 2 (OtherProj); hop2 ([2]) -> discovers 3;
+    // hop3 ([3]) finds nothing new and stops.
+    expect(witStub.queryByWiql).toHaveBeenCalledTimes(3);
     expect(result.workItems.map(w => w.id).sort()).toEqual([1, 2, 3]);
     expect(result.workItemRelations).toHaveLength(2);
+  });
+
+  it('buckets the initial link-follow frontier by the seed item\'s real project, not config.teamProject', async () => {
+    // Query root id 1 lives in "OtherProj", not config.teamProject ("Proj") — this
+    // happens with cross-project (tree/oneHop) queries. The BFS must query links
+    // scoped to "OtherProj" (where 1 actually lives), not "Proj".
+    witStub.queryById.mockResolvedValue({ queryType: 1, workItems: [{ id: 1 }] }); // Flat query, root id 1
+    witStub.getWorkItemsBatch.mockResolvedValueOnce([
+      { id: 1, fields: { 'System.WorkItemType': 'Task', 'System.Title': 'T1', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
+    ]);
+    witStub.queryByWiql.mockResolvedValueOnce({ workItemRelations: [] }); // no further links, just verify call scoping
+
+    const config = {
+      teamProject: 'Proj', relationTypes: ['X'], queryId: 'q-guid',
+      effortField: '', closedState: 'Closed', topLevelType: '',
+    };
+    await fetchHierarchyDirect(config, '', '');
+
+    expect(witStub.queryByWiql).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.stringContaining("[Source].[System.TeamProject] = 'OtherProj'"),
+      }),
+      'OtherProj' // not 'Proj' — scoped to where the seed item actually lives
+    );
   });
 
   it('perf: batch-fetches ids in concurrent chunks and merges every chunk\'s results (was serial)', async () => {
@@ -443,6 +476,7 @@ describe('fetchHierarchyDirect', () => {
     const relations = Array.from({ length: CHILD_COUNT }, (_, i) => ({
       rel: 'Child', source: { id: 1 }, target: { id: i + 2 },
     }));
+    witStub.queryById.mockResolvedValue({ queryType: 1, workItems: [{ id: 1 }] }); // Flat query, root id 1
     witStub.queryByWiql.mockResolvedValue({ workItemRelations: relations });
     witStub.getWorkItemsBatch.mockImplementation(async (req: { ids: number[] }) =>
       req.ids.map(id => ({
@@ -453,12 +487,14 @@ describe('fetchHierarchyDirect', () => {
     );
 
     const config = {
-      teamProject: 'Proj', relationTypes: ['Child'], queryId: '',
+      teamProject: 'Proj', relationTypes: ['Child'], queryId: 'q-guid',
       effortField: '', closedState: 'Closed', topLevelType: '',
     };
     const result = await fetchHierarchyDirect(config, '', '');
 
-    expect(witStub.getWorkItemsBatch).toHaveBeenCalledTimes(2);
+    // 1 call resolves the seed root id (1) up front to bucket the frontier by its real
+    // project; 2 more calls resolve the 250 discovered children (chunked at BATCH_SIZE=200).
+    expect(witStub.getWorkItemsBatch).toHaveBeenCalledTimes(3);
     // All ids across both chunks must be present — no drops from parallelizing the loop.
     expect(result.workItems).toHaveLength(CHILD_COUNT + 1);
     expect(new Set(result.workItems.map(w => w.id)).size).toBe(CHILD_COUNT + 1);

@@ -13,6 +13,7 @@ import { storage } from './utils/storage';
 import { httpClient } from './api/httpClient';
 import { buildAuthHeaders } from './api/authHeaders';
 import { useHierarchyStore } from './state/hierarchyStore';
+import { useConfigStore } from './state/configStore';
 import { useHierarchyData } from './hooks/useHierarchyData';
 import { useUrlState } from './hooks/useUrlState';
 import { useAutoRefresh } from './hooks/useAutoRefresh';
@@ -60,8 +61,12 @@ export default function App(): React.ReactElement {
   const { loadHierarchy, loading, error } = useHierarchyData();
   const rootIds = useHierarchyStore(s => s.rootIds);
   const lastFetchedAt = useHierarchyStore(s => s.lastFetchedAt);
+  const config = useConfigStore(s => s.config);
   useUrlState();
-  useAutoRefresh(loadHierarchy);
+  // A query is the required baseline for a load — gate the interval on it too, so
+  // auto-refresh stops cleanly instead of silently polling into a no-op every tick
+  // (e.g. after the user clears the source query while auto-refresh was running).
+  useAutoRefresh(loadHierarchy, !!config.teamProject && !!config.queryId);
 
   // Notify ADO extension shell that app has loaded. Fires once the app itself is
   // ready to render SOMETHING (welcome/error/tree) — not gated on a successful

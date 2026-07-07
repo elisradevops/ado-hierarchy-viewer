@@ -99,7 +99,10 @@ describe('BFF route integration', () => {
         .set(ADO_HEADERS)
         .send({ relationTypes: ['X'] });
       expect(res.status).toBe(422);
-      expect(res.body).toHaveProperty('error', 'Validation error');
+      // Error message now surfaces the specific zod issue (e.g. "Required") instead of
+      // a generic string, so a query-specific 422 (like a missing queryId) is actionable.
+      expect(res.body).toHaveProperty('error');
+      expect(res.body).toHaveProperty('details');
     });
 
     it('returns 422 on empty relationTypes array', async () => {
@@ -172,11 +175,19 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: 'MyProject', relationTypes: ['System.LinkTypes.Hierarchy-Forward'] });
+        .send({ project: 'MyProject', relationTypes: ['System.LinkTypes.Hierarchy-Forward'], queryId: 'q-baseline' });
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('workItemRelations');
       expect(res.body).toHaveProperty('workItems');
-      expect(res.body).toHaveProperty('matchedIds', null); // no queryId → matchedIds stays null
+      expect(res.body).toHaveProperty('matchedIds', null); // mocked fetchQueryRootIds returns matchedIds: null
+    });
+
+    it('returns 422 when queryId is missing — the query is now the required baseline', async () => {
+      const res = await request(app)
+        .post('/api/hierarchy')
+        .set(ADO_HEADERS)
+        .send({ project: 'MyProject', relationTypes: ['System.LinkTypes.Hierarchy-Forward'] });
+      expect(res.status).toBe(422);
     });
 
     it('returns matchedIds from fetchQueryRootIds when a queryId is supplied', async () => {
@@ -203,6 +214,11 @@ describe('BFF route integration', () => {
     });
 
     it('extracts unique IDs from non-empty relations (covers source/target filter+map arrows)', async () => {
+      // Link-following is seeded from the query's root ids — id 1 is the query baseline;
+      // 2 and 3 are discovered by extending outward via the selected link type.
+      mockFetchQueryRootIds.mockResolvedValueOnce({
+        rootIds: [1], queryRelations: [], matchedIds: null,
+      });
       mockFetchLinks.mockResolvedValueOnce([
         { rel: 'X', source: { id: 1 }, target: { id: 2 } },
         { rel: 'X', source: { id: 2 }, target: { id: 3 } },
@@ -216,28 +232,65 @@ describe('BFF route integration', () => {
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: 'MyProject', relationTypes: ['X'] });
+        .send({ project: 'MyProject', relationTypes: ['X'], queryId: 'q-1' });
 
       expect(res.status).toBe(200);
       expect(res.body.workItems).toHaveLength(3);
-      // fetchWorkItems should have been called with 3 unique ids (1, 2, 3)
+      // fetchWorkItems should have been called to resolve the newly-discovered ids (2, 3) —
+      // seed id 1 is already known from the query and isn't re-requested.
       expect(mockFetchWorkItems).toHaveBeenCalledWith(
         expect.anything(),
         expect.any(String),
         expect.any(String),
-        expect.arrayContaining([1, 2, 3]),
+        expect.arrayContaining([2, 3]),
         expect.any(Array),
         expect.any(String)
       );
     });
 
+    it('buckets the initial link-follow frontier by the seed item\'s real project, not the request project', async () => {
+      // Query root id 1 lives in "OtherProject", not the request's "MyProject" — this
+      // happens with cross-project (tree/oneHop) queries. The BFS must query links
+      // scoped to "OtherProject" (where 1 actually lives), not "MyProject".
+      mockFetchQueryRootIds.mockResolvedValueOnce({
+        rootIds: [1], queryRelations: [], matchedIds: null,
+      });
+      mockFetchWorkItems.mockResolvedValueOnce([
+        { id: 1, type: 'Task', title: 'T1', state: 'Active', teamProject: 'OtherProject', effort: null },
+      ]);
+      mockFetchLinks.mockResolvedValueOnce([]); // no further links, just verify the call scoping
+
+      const res = await request(app)
+        .post('/api/hierarchy')
+        .set(ADO_HEADERS)
+        .send({ project: 'MyProject', relationTypes: ['X'], queryId: 'q-1' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchLinks).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        'OtherProject', // not 'MyProject' — scoped to where the seed item actually lives
+        ['X'],
+        [1]
+      );
+    });
+
     it('propagates service errors through errorHandler', async () => {
+      mockFetchQueryRootIds.mockResolvedValueOnce({
+        rootIds: [1], queryRelations: [], matchedIds: null,
+      });
+      // The BFS resolves the seed item first (to bucket the frontier by its real
+      // project) before ever calling fetchLinks — mock that resolution so the frontier
+      // is non-empty and the loop actually reaches the rejected fetchLinks call below.
+      mockFetchWorkItems.mockResolvedValueOnce([
+        { id: 1, type: 'Task', title: 'T1', state: 'Active', teamProject: 'P', effort: null },
+      ]);
       mockFetchLinks.mockRejectedValueOnce(new Error('ADO unavailable'));
 
       const res = await request(app)
         .post('/api/hierarchy')
         .set(ADO_HEADERS)
-        .send({ project: 'P', relationTypes: ['X'] });
+        .send({ project: 'P', relationTypes: ['X'], queryId: 'q-1' });
 
       expect(res.status).toBe(500);
       expect(res.body).toHaveProperty('error');

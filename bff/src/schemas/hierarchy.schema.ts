@@ -16,7 +16,7 @@ export const HierarchyRequestSchema = z.object({
   relationTypes: z.array(z.string().min(1)).default([]),
   closedState: z.string().min(1).default('Closed'),
   effortField: z.string().min(1).default('Microsoft.VSTS.Scheduling.OriginalEstimate'),
-  queryId: z.string().optional().default(''),
+  queryId: z.string().min(1, 'queryId is required — the query is the baseline of the hierarchy'),
 });
 
 export type LinksRequest  = z.infer<typeof LinksRequestSchema>;

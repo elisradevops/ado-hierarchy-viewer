@@ -371,7 +371,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               },
             }}
             placeholder="Click to browse or paste a query ID…"
-            helperText={config.queryId ? 'Seeds the hierarchy from saved query results.' : 'Optional: pick a saved query to seed top-level items.'}
+            helperText={config.queryId ? 'Seeds the hierarchy from saved query results.' : 'Required: the query is the baseline of the hierarchy.'}
             size="small"
             onClick={() => { if (config.teamProject) setQuerySelectorOpen(true); }}
             sx={{ cursor: config.teamProject ? 'pointer' : 'default' }}
@@ -418,7 +418,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               <TextField
                 {...params}
                 label="Link Types"
-                helperText="Which link relationships to follow when building the tree."
+                helperText="Optional: extend the query's tree by following these link types outward."
               />
             )}
           />
@@ -437,7 +437,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               <IconButton
                 size="small"
                 onClick={onRun}
-                disabled={!config.teamProject || (config.relationTypes.length === 0 && !config.queryId)}
+                disabled={!config.teamProject || !config.queryId}
                 color="primary"
               >
                 <ChevronRightIcon />
@@ -456,7 +456,7 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
             variant="contained"
             fullWidth
             onClick={onRun}
-            disabled={!config.teamProject || (config.relationTypes.length === 0 && !config.queryId)}
+            disabled={!config.teamProject || !config.queryId}
           >
             Load Hierarchy
           </Button>

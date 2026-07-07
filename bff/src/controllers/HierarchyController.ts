@@ -38,7 +38,7 @@ export async function postLinks(req: Request, res: Response, next: NextFunction)
 
   const parsed = LinksRequestSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(422).json({ error: 'Validation error', details: parsed.error.flatten() });
+    res.status(422).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.flatten() });
     return;
   }
 
@@ -65,7 +65,7 @@ export async function postWorkItems(req: Request, res: Response, next: NextFunct
 
   const parsed = WorkItemsRequestSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(422).json({ error: 'Validation error', details: parsed.error.flatten() });
+    res.status(422).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.flatten() });
     return;
   }
 
@@ -94,7 +94,7 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
 
   const parsed = HierarchyRequestSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(422).json({ error: 'Validation error', details: parsed.error.flatten() });
+    res.status(422).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.flatten() });
     return;
   }
 
@@ -104,31 +104,49 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
     const fields = [...new Set([...BASE_WI_FIELDS, effortField ?? DEFAULT_EFFORT_FIELD])];
     const resolvedEffortField = effortField ?? DEFAULT_EFFORT_FIELD;
 
-    let queryRootIds: number[] | undefined;
-    let queryRelations: WorkItemRelation[] = [];
-    let matchedIds: number[] | null = null;
-    if (queryId) {
-      const q = await fetchQueryRootIds(client, creds.orgUrl, project, queryId);
-      queryRootIds = q.rootIds;
-      queryRelations = q.queryRelations;
-      matchedIds = q.matchedIds;
+    // The query is always the baseline — link types only extend outward from the
+    // work items the query actually returned, they never seed the hierarchy on their own.
+    const q = await fetchQueryRootIds(client, creds.orgUrl, project, queryId);
+    const queryRootIds = q.rootIds;
+    const queryRelations = q.queryRelations;
+    const matchedIds = q.matchedIds;
+
+    // Seed = every node the query touched (roots + all relation endpoints).
+    const seedIds = new Set<number>(queryRootIds);
+    for (const r of queryRelations) {
+      seedIds.add(r.source!.id);
+      seedIds.add(r.target!.id);
     }
 
-    // Cross-project recursive link-follow: start from `project`, and whenever a newly
-    // resolved work item belongs to a project we haven't queried yet, fetch that
-    // project's own links too. Bounded by MAX_PROJECT_HOPS + shrinking frontier.
+    // Cross-project recursive link-follow, scoped to ids reachable from the query's seed:
+    // each hop only asks ADO for links whose Source.Id is in the current frontier, so link
+    // types extend the query's tree instead of pulling in the whole project's link graph.
+    // Bounded by MAX_PROJECT_HOPS + shrinking frontier.
     const linkRelationsByPair = new Map<string, WorkItemRelation>();
     const resolvedItemsById = new Map<number, WorkItem>();
-    const knownProjects = new Set<string>([project]);
+    const visitedIds = new Set<number>(seedIds);
 
-    if (relationTypes.length > 0) {
-      let frontier = [project];
-      for (let hop = 0; hop < MAX_PROJECT_HOPS && frontier.length > 0; hop++) {
+    if (relationTypes.length > 0 && seedIds.size > 0) {
+      // Resolve seed items up front and bucket the initial frontier by their REAL team
+      // project — a cross-project (tree/oneHop) query can seed ids that don't live in
+      // `project`, and WIQL's [Source].[System.TeamProject] filter would silently drop
+      // their links if hop 0 assumed they were all in `project`.
+      const seedItems = await fetchWorkItems(client, creds.orgUrl, project, [...seedIds], fields, resolvedEffortField);
+      for (const item of seedItems) resolvedItemsById.set(item.id, item);
+      let frontierByProject = new Map<string, number[]>();
+      for (const item of seedItems) {
+        if (!item.teamProject) continue;
+        const bucket = frontierByProject.get(item.teamProject);
+        if (bucket) bucket.push(item.id);
+        else frontierByProject.set(item.teamProject, [item.id]);
+      }
+      for (let hop = 0; hop < MAX_PROJECT_HOPS && frontierByProject.size > 0; hop++) {
+        const entries = [...frontierByProject.entries()];
         // Bounded via the same concurrency limiter used for batch work-item fetch —
         // an unusually wide frontier (many newly-discovered projects in one hop)
         // shouldn't fire unlimited concurrent requests against ADO.
         const batches = await Promise.all(
-          frontier.map(p => adoConcurrencyLimit(() => fetchLinks(client, creds.orgUrl, p, relationTypes)))
+          entries.map(([p, ids]) => adoConcurrencyLimit(() => fetchLinks(client, creds.orgUrl, p, relationTypes, ids)))
         );
 
         const idsToResolve = new Set<number>();
@@ -139,23 +157,23 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
             if (!linkRelationsByPair.has(pairKey)) {
               linkRelationsByPair.set(pairKey, { ...r, origin: 'link' });
             }
-            if (!resolvedItemsById.has(r.source.id)) idsToResolve.add(r.source.id);
-            if (!resolvedItemsById.has(r.target.id)) idsToResolve.add(r.target.id);
+            if (!visitedIds.has(r.target.id)) idsToResolve.add(r.target.id);
           }
         }
 
         if (idsToResolve.size === 0) break;
+        for (const id of idsToResolve) visitedIds.add(id);
 
         const newItems = await fetchWorkItems(client, creds.orgUrl, project, [...idsToResolve], fields, resolvedEffortField);
-        const discoveredProjects = new Set<string>();
+        const nextFrontierByProject = new Map<string, number[]>();
         for (const item of newItems) {
           resolvedItemsById.set(item.id, item);
-          if (item.teamProject && !knownProjects.has(item.teamProject)) {
-            knownProjects.add(item.teamProject);
-            discoveredProjects.add(item.teamProject);
-          }
+          if (!item.teamProject) continue;
+          const bucket = nextFrontierByProject.get(item.teamProject);
+          if (bucket) bucket.push(item.id);
+          else nextFrontierByProject.set(item.teamProject, [item.id]);
         }
-        frontier = [...discoveredProjects];
+        frontierByProject = nextFrontierByProject;
       }
     }
 
@@ -171,7 +189,7 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
       if (r.source) idSet.add(r.source.id);
       if (r.target) idSet.add(r.target.id);
     }
-    for (const id of (queryRootIds ?? [])) idSet.add(id);
+    for (const id of queryRootIds) idSet.add(id);
 
     const missingIds = [...idSet].filter(id => !resolvedItemsById.has(id));
     const missingItems = missingIds.length > 0
