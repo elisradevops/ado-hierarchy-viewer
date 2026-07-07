@@ -170,6 +170,22 @@ describe('buildTree', () => {
       // So node 3 should have no children
       expect(node!.children[0].children[0].children).toEqual([]);
     });
+
+    it('cycle: records the cut edge in cutCycles on the node that would have looped', () => {
+      // 1→2→3→1 (cycle) — node 3's edge back to 1 is dropped and recorded
+      const adjacency = makeAdjacency([[1, [2]], [2, [3]], [3, [1]]]);
+      const itemsById = makeItemsById([
+        { id: 1, type: 'Task', title: 'Item 1', state: 'Active', teamProject: 'P', effort: 0 },
+        { id: 2, type: 'Task', title: 'Item 2', state: 'Active', teamProject: 'P', effort: 0 },
+        { id: 3, type: 'Task', title: 'Item 3', state: 'Active', teamProject: 'P', effort: 0 },
+      ]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      const node3 = node!.children[0].children[0];
+      expect(node3.cutCycles).toEqual([1]);
+      // Nodes that never hit a cycle have no cutCycles at all
+      expect(node!.cutCycles).toBeUndefined();
+      expect(node!.children[0].cutCycles).toBeUndefined();
+    });
   });
 
   describe('missing items', () => {
@@ -216,6 +232,115 @@ describe('buildTree', () => {
 
       expect(node!.isQueryMatch).toBeUndefined();
       expect(node!.children[0].isQueryMatch).toBeUndefined();
+    });
+  });
+
+  describe('originalEstimateTotal rollup', () => {
+    function estimateItem(id: number, originalEstimate: number | null): WorkItem {
+      return {
+        id,
+        type: 'Task',
+        title: `Item ${id}`,
+        state: 'Active',
+        teamProject: 'Proj',
+        effort: null,
+        originalEstimate,
+      };
+    }
+
+    it('leaf node: originalEstimateTotal equals its own estimate', () => {
+      const adjacency = makeAdjacency([[1, [2]]]);
+      const itemsById = makeItemsById([estimateItem(1, 5), estimateItem(2, 8)]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].originalEstimateTotal).toBe(8);
+    });
+
+    it('parent node: originalEstimateTotal = own + sum of descendants', () => {
+      // 1(estimate=10) -> 2(estimate=5) -> 3(estimate=3)
+      const adjacency = makeAdjacency([[1, [2]], [2, [3]]]);
+      const itemsById = makeItemsById([estimateItem(1, 10), estimateItem(2, 5), estimateItem(3, 3)]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].children[0].originalEstimateTotal).toBe(3);
+      expect(node!.children[0].originalEstimateTotal).toBe(8);
+      expect(node!.originalEstimateTotal).toBe(18);
+    });
+
+    it('null/missing originalEstimate is treated as 0', () => {
+      const adjacency = makeAdjacency([[1, [2, 3]]]);
+      const itemsById = makeItemsById([estimateItem(1, null), estimateItem(2, null), estimateItem(3, 7)]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].originalEstimateTotal).toBe(0);
+      expect(node!.children[1].originalEstimateTotal).toBe(7);
+      expect(node!.originalEstimateTotal).toBe(7);
+    });
+  });
+
+  describe('overdueCount rollup', () => {
+    function timeItem(id: number, originalEstimate: number | null, completedWork: number | null): WorkItem {
+      return {
+        id,
+        type: 'Task',
+        title: `Item ${id}`,
+        state: 'Active',
+        teamProject: 'Proj',
+        effort: null,
+        originalEstimate,
+        completedWork,
+      };
+    }
+
+    it('a leaf whose own completedWork exceeds its own estimate contributes 1', () => {
+      const adjacency = makeAdjacency([[1, [2]]]);
+      const itemsById = makeItemsById([timeItem(1, null, null), timeItem(2, 5, 10)]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].overdueCount).toBe(1);
+    });
+
+    it('a leaf under its own estimate contributes 0', () => {
+      const adjacency = makeAdjacency([[1, [2]]]);
+      const itemsById = makeItemsById([timeItem(1, null, null), timeItem(2, 10, 5)]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].overdueCount).toBe(0);
+    });
+
+    it('regression: an over-budget child stays flagged at the parent even when a sibling finishing early nets the rollup to zero', () => {
+      // Reproduces the reported case: "Prepare STD" (est 10, completed 5 -> 5h under) and
+      // "Update SRD/STD/SVD" (est 5, completed 10 -> +5h over) roll up to a parent whose
+      // net completedWorkTotal(15) === originalEstimateTotal(15) — net-sum math alone would
+      // call that "done", silently hiding the individually-overdue child.
+      const adjacency = makeAdjacency([[1, [2, 3]]]);
+      const itemsById = makeItemsById([
+        timeItem(1, null, null),
+        timeItem(2, 10, 5),  // under by 5h
+        timeItem(3, 5, 10),  // over by 5h
+      ]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+
+      expect(node!.completedWorkTotal).toBe(15);
+      expect(node!.originalEstimateTotal).toBe(15); // net looks exactly on-budget
+      expect(node!.overdueCount).toBe(1); // ...but the count still catches it
+    });
+
+    it('sums overdueCount across multiple overdue descendants at any depth', () => {
+      // 1 -> 2 (over) -> 3 (over)
+      const adjacency = makeAdjacency([[1, [2]], [2, [3]]]);
+      const itemsById = makeItemsById([
+        timeItem(1, null, null),
+        timeItem(2, 5, 10),
+        timeItem(3, 5, 10),
+      ]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].children[0].overdueCount).toBe(1);
+      expect(node!.children[0].overdueCount).toBe(2);
+      expect(node!.overdueCount).toBe(2);
+    });
+
+    it('no estimate set -> never counted as overdue regardless of completedWork', () => {
+      const adjacency = makeAdjacency([[1, [2]]]);
+      const itemsById = makeItemsById([timeItem(1, null, null), timeItem(2, null, 100)]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+      expect(node!.children[0].overdueCount).toBe(0);
+      expect(node!.overdueCount).toBe(0);
     });
   });
 });

@@ -6,7 +6,7 @@
  * Visibility rule (HierarchyTreeTable):
  *   - always: true  → always shown
  *   - field present → shown only when at least one loaded WIT type supports that field
- *   - no field, not always → always shown (computed columns like effort/progress)
+ *   - no field, not always → always shown (computed columns like progress)
  */
 
 export interface ColumnDef {
@@ -33,13 +33,12 @@ export const COLUMN_DEFS: ColumnDef[] = [
   { key: 'areaPath',         label: 'Area Path',         width: '180px',           field: 'System.AreaPath',          defaultVisible: false },
   { key: 'iterationPath',    label: 'Iteration Path',    width: '180px',           field: 'System.IterationPath',     defaultVisible: false },
   { key: 'storyPoints',      label: 'Story Points',      width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.StoryPoints',       defaultVisible: false },
-  { key: 'remainingWork',    label: 'Remaining Work',    width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.RemainingWork',     defaultVisible: false },
-  { key: 'originalEstimate', label: 'Original Estimate', width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.OriginalEstimate',  defaultVisible: false },
+  { key: 'remainingWork',    label: 'Remaining Work',    width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.RemainingWork' },
+  { key: 'originalEstimate', label: 'Original Estimate', width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.OriginalEstimate' },
   { key: 'priority',         label: 'Priority',          width: '80px',  align: 'right', field: 'Microsoft.VSTS.Common.Priority' },
   { key: 'tags',             label: 'Tags',              width: '100px',           field: 'System.Tags',              defaultVisible: false },
   { key: 'progressPct',      label: 'Progress',          width: '165px' },
-  { key: 'effort',           label: 'Effort',            width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.OriginalEstimate' },
-  { key: 'effortTotal',      label: 'Total Effort',      width: '110px', align: 'right' },
+  { key: 'completedWork',    label: 'Completed Work',    width: '100px', align: 'right', field: 'Microsoft.VSTS.Scheduling.CompletedWork',     defaultVisible: false },
   { key: 'time',             label: 'Time',              width: '150px', field: 'Microsoft.VSTS.Scheduling.RemainingWork' },
 ];
 

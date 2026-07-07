@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { AdoClient } from '../services/AdoClient';
 import { extractCreds } from '../middleware/creds';
 import { fetchLinks, fetchWorkItems, fetchQueryRootIds, type WorkItem, type WorkItemRelation } from '../services/HierarchyService';
+import { adoConcurrencyLimit } from '../utils/queue';
 import {
   LinksRequestSchema,
   WorkItemsRequestSchema,
@@ -123,8 +124,11 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
     if (relationTypes.length > 0) {
       let frontier = [project];
       for (let hop = 0; hop < MAX_PROJECT_HOPS && frontier.length > 0; hop++) {
+        // Bounded via the same concurrency limiter used for batch work-item fetch —
+        // an unusually wide frontier (many newly-discovered projects in one hop)
+        // shouldn't fire unlimited concurrent requests against ADO.
         const batches = await Promise.all(
-          frontier.map(p => fetchLinks(client, creds.orgUrl, p, relationTypes))
+          frontier.map(p => adoConcurrencyLimit(() => fetchLinks(client, creds.orgUrl, p, relationTypes)))
         );
 
         const idsToResolve = new Set<number>();

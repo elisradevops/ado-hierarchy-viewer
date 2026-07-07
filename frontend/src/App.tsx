@@ -63,14 +63,18 @@ export default function App(): React.ReactElement {
   useUrlState();
   useAutoRefresh(loadHierarchy);
 
-  // Notify ADO extension shell that app has loaded
+  // Notify ADO extension shell that app has loaded. Fires once the app itself is
+  // ready to render SOMETHING (welcome/error/tree) — not gated on a successful
+  // connection, since a rendered ErrorState is still a completed load from the
+  // host's perspective. Genuine unrecoverable init failures instead call
+  // requestLoadFailed (see useAdoContext) so the host spinner never hangs.
   useEffect(() => {
-    if (ready && status === 'connected' && sdk) {
+    if (ready && sdk) {
       try {
         (sdk as { notifyLoadSucceeded: () => void }).notifyLoadSucceeded();
       } catch { /* not in ADO context */ }
     }
-  }, [ready, status, sdk]);
+  }, [ready, sdk]);
 
   if (!ready) {
     return (

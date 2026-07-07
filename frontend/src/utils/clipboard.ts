@@ -1,7 +1,7 @@
 import type { FlatRow } from '../types/tree';
 import { safeToFixed } from './numberGuards';
 
-const TSV_HEADERS = ['ID', 'Type', 'Title', 'State', 'Progress %', 'Effort', 'Total Effort'];
+const TSV_HEADERS = ['ID', 'Type', 'Title', 'State', 'Progress %', 'Original Estimate', 'Remaining Work', 'Completed Work'];
 
 export function flatRowsToTsv(rows: FlatRow[]): string {
   const lines: string[] = [TSV_HEADERS.join('\t')];
@@ -14,8 +14,9 @@ export function flatRowsToTsv(rows: FlatRow[]): string {
         `${indent}${node.title}`,
         node.state,
         safeToFixed(node.progressPct, 1),
-        node.effort,
-        node.effortTotal,
+        node.originalEstimate,
+        node.remainingWork,
+        node.completedWork,
       ].join('\t')
     );
   }

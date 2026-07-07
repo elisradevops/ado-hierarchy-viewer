@@ -4,6 +4,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import LinkIcon from '@mui/icons-material/Link';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
+import LoopIcon from '@mui/icons-material/Loop';
 import { StateChip } from './StateChip';
 import { ProgressBar, TimeProgressBar } from './ProgressBar';
 import { buildWorkItemUrl } from '../utils/adoUrlUtils';
@@ -14,6 +15,12 @@ import type { Density } from '../state/uiPrefsStore';
 import type { ColumnDef } from '../constants/columns';
 
 const INDENT_PX = 20;
+const INDENT_PX_NARROW = 12;
+// Deep/degenerate trees (edge case: 20+ levels) must not shrink the elastic Title
+// column to nothing. Cap the indent at a fixed number of visual levels — nodes
+// beyond the cap still render at their real aria-level, just without further
+// horizontal offset.
+const MAX_INDENT_LEVELS = 8;
 
 const CHEVRON_SX = { fontSize: 18, cursor: 'pointer', flexShrink: 0, color: 'text.disabled' } as const;
 const SPACER_SX = { display: 'inline-block', flexShrink: 0 } as const;
@@ -46,7 +53,7 @@ export const TYPE_COLORS: Record<string, string> = {
   Review:                  '#E06C00',
   Risk:                    '#E06C00',
 };
-const TYPE_DOT_FALLBACK = '#8A8886'; // ADO neutral grey
+export const TYPE_DOT_FALLBACK = '#8A8886'; // ADO neutral grey
 
 /** ADO Server icon IDs — used to build fallback URLs when API metadata not yet loaded.
  *  URL format: {orgUrl}/_apis/wit/workitemicons/{iconId}?api-version=7.1 */
@@ -149,6 +156,10 @@ const REL_CHIP_ICON_SX = { fontSize: '10px' } as const;
 // (scaffolding beyond the source query's own results) — same chip, different color + icon.
 const DISCOVERED_REL_COLOR = '#B45309';
 
+// Distinct color for the cut-cycle indicator — a link the tree builder dropped to avoid
+// infinite recursion (it would loop back to an ancestor already on this branch).
+const CUT_CYCLE_COLOR = '#7C3AED';
+
 const ID_SX = {
   fontSize: '0.68rem',
   fontFamily: 'ui-monospace, "JetBrains Mono", "Fira Code", monospace',
@@ -237,6 +248,8 @@ interface TreeRowProps {
   apiTypeIconUrls?: Record<string, string>;
   visibleColumns: ColumnDef[];
   gridCols: string;
+  /** Narrow-viewport mode: smaller indent step so the tree stays usable in a small ADO hub panel. */
+  isNarrow?: boolean;
 }
 
 export const TreeRow = React.memo(function TreeRow({
@@ -251,6 +264,7 @@ export const TreeRow = React.memo(function TreeRow({
   apiTypeIconUrls,
   visibleColumns,
   gridCols,
+  isNarrow,
 }: TreeRowProps): React.ReactElement {
   const { node, depth, hasChildren, isExpanded } = row;
   // API color takes precedence; fall back to hardcoded palette
@@ -269,14 +283,20 @@ export const TreeRow = React.memo(function TreeRow({
 
   const workItemUrl = buildWorkItemUrl(orgUrl, teamProject, node.id);
 
-  const indentSx = useMemo(() => ({
-    ...SPACER_SX,
-    width: depth * INDENT_PX,
-    ...(depth > 0 && {
-      borderLeft: '2px solid',
-      borderColor: `rgba(27,69,143,${Math.min(0.07 + depth * 0.04, 0.2)})`,
-    }),
-  }), [depth]);
+  const indentSx = useMemo(() => {
+    const indentStep = isNarrow ? INDENT_PX_NARROW : INDENT_PX;
+    const effectiveDepth = Math.min(depth, MAX_INDENT_LEVELS);
+    const width = effectiveDepth * indentStep;
+    if (effectiveDepth === 0) return { ...SPACER_SX, width: 0 };
+    // Per-level guide rails (one vertical line per ancestor, up to the cap) so lineage
+    // stays traceable at depth 20+ instead of a single flat border.
+    const railOpacity = Math.min(0.08 + effectiveDepth * 0.015, 0.2);
+    return {
+      ...SPACER_SX,
+      width,
+      backgroundImage: `repeating-linear-gradient(to right, rgba(27,69,143,${railOpacity}) 0, rgba(27,69,143,${railOpacity}) 2px, transparent 2px, transparent ${indentStep}px)`,
+    };
+  }, [depth, isNarrow]);
 
   // Relationship chip origin (below) still needs to know whether a query is active —
   // rows are no longer dimmed for non-matches (the "Show only matches" toolbar toggle
@@ -300,8 +320,28 @@ export const TreeRow = React.memo(function TreeRow({
   const relLabel = node.linkRel ? relChipLabel(node.linkRel) : '';
   const relTitle = node.linkRel ? relDisplayName(node.linkRel) : undefined;
 
+  // Cut-cycle indicator: a link on this node pointed back to an ancestor already on this
+  // branch, so treeBuilder dropped it to avoid infinite recursion. Surface it rather than
+  // let a child silently disappear (see TreeNode.cutCycles / services/treeBuilder.ts).
+  const cutCycles = node.cutCycles;
+  const hasCutCycles = !!cutCycles && cutCycles.length > 0;
+  const cutCycleTitle = hasCutCycles
+    ? `Cyclic link${cutCycles!.length > 1 ? 's' : ''} to #${cutCycles!.join(', #')} not shown (would loop back)`
+    : undefined;
+
+  const expandable = hasChildren && !node.isRef;
+
   return (
-    <Box tabIndex={0} onClick={() => onActivate(node.id)} sx={rowSx}>
+    <Box
+      id={`tree-row-${node.id}`}
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-expanded={expandable ? isExpanded : undefined}
+      aria-selected={isActive}
+      tabIndex={-1}
+      onClick={() => onActivate(node.id)}
+      sx={rowSx}
+    >
       {visibleColumns.map(col => {
         switch (col.key) {
           case 'title':
@@ -309,10 +349,10 @@ export const TreeRow = React.memo(function TreeRow({
               <Box key="title" sx={cellSx}>
                 <Box sx={TITLE_INNER_SX}>
                   <Box sx={indentSx} />
-                  {hasChildren && !node.isRef ? (
+                  {expandable ? (
                     isExpanded
-                      ? <ExpandMoreIcon sx={CHEVRON_SX} onClick={(e) => { e.stopPropagation(); onToggle(node.id); }} />
-                      : <ChevronRightIcon sx={CHEVRON_SX} onClick={(e) => { e.stopPropagation(); onToggle(node.id); }} />
+                      ? <ExpandMoreIcon sx={CHEVRON_SX} role="button" tabIndex={-1} aria-label="Collapse" onClick={(e) => { e.stopPropagation(); onToggle(node.id); }} />
+                      : <ChevronRightIcon sx={CHEVRON_SX} role="button" tabIndex={-1} aria-label="Expand" onClick={(e) => { e.stopPropagation(); onToggle(node.id); }} />
                   ) : (
                     <Box sx={{ ...SPACER_SX, width: 18 }} />
                   )}
@@ -335,6 +375,16 @@ export const TreeRow = React.memo(function TreeRow({
                   <Link href={workItemUrl} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} underline="hover" color="inherit" sx={hasChildren ? TITLE_PARENT_SX : TITLE_LEAF_SX} title={node.title}>
                     {node.title}
                   </Link>
+                  {hasCutCycles && (
+                    <Box
+                      component="span"
+                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(CUT_CYCLE_COLOR, 0.1), color: CUT_CYCLE_COLOR, border: `1px solid ${alpha(CUT_CYCLE_COLOR, 0.25)}` }}
+                      title={cutCycleTitle}
+                    >
+                      <LoopIcon sx={REL_CHIP_ICON_SX} />
+                      cycle
+                    </Box>
+                  )}
                 </Box>
               </Box>
             );
@@ -417,29 +467,23 @@ export const TreeRow = React.memo(function TreeRow({
                 <ProgressBar value={node.progressPct} closedLeaves={node.closedLeaves} totalLeaves={node.totalLeaves} />
               </Box>
             );
-          case 'effort':
+          case 'completedWork':
             return (
-              <Box key="effort" sx={effortSx}>
-                <Typography sx={node.effort != null && node.effort !== 0 ? NUMERIC_VALUE_SX : NUMERIC_MUTED_SX}>{node.effort != null && node.effort !== 0 ? node.effort : '—'}</Typography>
+              <Box key="completedWork" sx={effortSx}>
+                <Typography sx={node.completedWork != null ? NUMERIC_VALUE_SX : NUMERIC_MUTED_SX}>{node.completedWork ?? '—'}</Typography>
               </Box>
             );
           case 'time': {
-            const hasTimeData = (node.completedWorkTotal > 0 || node.remainingWorkTotal > 0);
+            const hasTimeData = (node.completedWorkTotal > 0 || node.remainingWorkTotal > 0 || node.originalEstimateTotal > 0);
             return (
               <Box key="time" sx={cellSx}>
                 {hasTimeData
-                  ? <TimeProgressBar completed={node.completedWorkTotal} remaining={node.remainingWorkTotal} />
+                  ? <TimeProgressBar completed={node.completedWorkTotal} remaining={node.remainingWorkTotal} estimate={node.originalEstimateTotal} overdueCount={node.overdueCount} />
                   : <Typography sx={NUMERIC_MUTED_SX}>—</Typography>
                 }
               </Box>
             );
           }
-          case 'effortTotal':
-            return (
-              <Box key="effortTotal" sx={effortSx}>
-                <Typography sx={node.effortTotal != null ? NUMERIC_VALUE_SX : NUMERIC_MUTED_SX}>{node.effortTotal ?? '—'}</Typography>
-              </Box>
-            );
           default:
             return null;
         }

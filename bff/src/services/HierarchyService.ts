@@ -5,6 +5,7 @@ import { adoConcurrencyLimit } from '../utils/queue';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { deriveMatchedIds, type QueryDefinition } from './queryMatchDerivation';
+import { normalizeQueryType } from '@ado-hierarchy-viewer/query-match-core';
 
 // ADO on-prem api-version fallback chain
 const API_VERSIONS = ['7.1', '5.1', ''] as const;
@@ -118,7 +119,10 @@ export async function fetchQueryRootIds(
 
   let rootIds: number[] = [];
   let queryRelations: WorkItemRelation[] = [];
-  const queryType = (result.queryType ?? '').toLowerCase();
+  // Normalized against the same shared logic the extension-mode twin uses (which compares
+  // the SDK's numeric QueryType enum instead of a raw string) — removes the drift risk of
+  // two independent queryType comparisons silently diverging.
+  const queryType = normalizeQueryType(result.queryType);
 
   if (queryType === 'flat' && Array.isArray(result.workItems)) {
     rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
@@ -132,7 +136,7 @@ export async function fetchQueryRootIds(
       .filter(r => !childIds.has(r.source!.id))
       .map(r => r.source!.id)
       .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
-  } else if (queryType === 'onehop' && Array.isArray(result.workItemRelations)) {
+  } else if (queryType === 'oneHop' && Array.isArray(result.workItemRelations)) {
     // "Direct Links" queries: top-level items are marked by a null-source entry
     // { source: null, target: {id} }; actual one-hop links have both source and target.
     const seen = new Set<number>();

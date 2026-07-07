@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { initAdoContext, type AdoContext } from '../adoSdk';
+import { initAdoContext, requestLoadFailed, type AdoContext } from '../adoSdk';
 import { useConnectionStore } from '../state/connectionStore';
 import { useConfigStore } from '../state/configStore';
 import { normalizeToBearerHeader } from '../utils/tokenUtils';
@@ -31,12 +31,17 @@ export function useAdoContext(): UseAdoContextResult {
           if (ctx.project) {
             setConfig({ teamProject: ctx.project });
           } else {
-            setError('Could not determine the ADO project from context — try reloading the page.');
+            const msg = 'Could not determine the ADO project from context — try reloading the page.';
+            setError(msg);
+            // Unrecoverable for this load — tell the host so its spinner doesn't hang forever.
+            requestLoadFailed(new Error(msg));
           }
         } else if (ctx.isAdo && !ctx.accessToken) {
           // ADO host detected but token acquisition failed — surface explicitly.
           // Without this, the UI appears connected but every request silently fails.
-          setError('Could not acquire ADO token — try reloading the page.');
+          const msg = 'Could not acquire ADO token — try reloading the page.';
+          setError(msg);
+          requestLoadFailed(new Error(msg));
         }
         setSdk(ctx.sdk ?? null);
         setReady(true);
@@ -44,6 +49,8 @@ export function useAdoContext(): UseAdoContextResult {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'ADO SDK init failed');
         setReady(true); // still ready — standalone mode fallback
+        // No-ops if the SDK handshake itself never completed (nothing to notify over).
+        requestLoadFailed(err);
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

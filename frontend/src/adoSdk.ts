@@ -21,6 +21,10 @@ export interface AdoContext {
 // Module-level promise singleton — ensure SDK is only initialized once.
 let initPromise: Promise<AdoContext> | null = null;
 
+// Cached once init resolves with isAdo:true — lets requestResize() below fire
+// without plumbing the SDK instance through every component that changes layout.
+let cachedSdk: typeof SDK | null = null;
+
 const hasAnySearchParam = (params: URLSearchParams, names: string[]): boolean =>
   names.some(name => params.has(name));
 
@@ -226,6 +230,8 @@ export async function initAdoContext(): Promise<AdoContext> {
       /* ignore token errors */
     }
 
+    cachedSdk = SDK;
+
     return {
       isAdo: true,
       sdk: SDK,
@@ -246,4 +252,35 @@ export async function initAdoContext(): Promise<AdoContext> {
   });
 
   return initPromise;
+}
+
+/**
+ * Asks the ADO host to resize this iframe to fit current content (auto-fit,
+ * no args). No-op outside the extension host (cachedSdk unset) or if the SDK
+ * call itself throws (e.g. host frame rejects it) — resizing is best-effort
+ * and must never surface an error to the user.
+ */
+export function requestResize(): void {
+  if (!cachedSdk) return;
+  try {
+    cachedSdk.resize();
+  } catch {
+    /* not embedded / host rejected the resize — ignore */
+  }
+}
+
+/**
+ * Tells the ADO host the extension failed to load, so its own loading
+ * spinner resolves instead of spinning forever. No-op unless SDK.init/ready
+ * already succeeded (cachedSdk set) — if the handshake itself never
+ * completed, there is no channel to notify over.
+ */
+export function requestLoadFailed(err?: unknown): void {
+  if (!cachedSdk) return;
+  try {
+    const message = err instanceof Error ? err.message : String(err ?? 'ADO Hierarchy Viewer failed to load');
+    void cachedSdk.notifyLoadFailed(new Error(message));
+  } catch {
+    /* not embedded / host rejected the call — ignore */
+  }
 }

@@ -1,6 +1,6 @@
 import React, { useRef, useState, useMemo } from 'react';
 import {
-  Alert, Box, Button, Chip, Divider, IconButton, InputAdornment,
+  Alert, Box, Divider, IconButton, InputAdornment,
   ListItemIcon, Menu, MenuItem, Snackbar, TextField, Tooltip, Typography,
 } from '@mui/material';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
@@ -10,16 +10,14 @@ import DownloadIcon from '@mui/icons-material/Download';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PrintIcon from '@mui/icons-material/Print';
 import ClearIcon from '@mui/icons-material/Clear';
-import AutorenewIcon from '@mui/icons-material/Autorenew';
 import CheckIcon from '@mui/icons-material/Check';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DensitySmallIcon from '@mui/icons-material/DensitySmall';
 import DensityMediumIcon from '@mui/icons-material/DensityMedium';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
 import CheckBoxIcon from '@mui/icons-material/CheckBox';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { COLUMN_DEFS } from '../constants/columns';
@@ -55,25 +53,6 @@ const SEARCH_SX = { width: 180, flexShrink: 0 } as const;
 
 const DIVIDER_SX = { mx: 0.5, height: 24, alignSelf: 'center' } as const;
 
-const AR_BUTTON_BASE_SX = {
-  textTransform: 'none',
-  fontSize: '0.78rem',
-  px: 0.75,
-  py: 0.25,
-  minWidth: 0,
-  whiteSpace: 'nowrap',
-} as const;
-
-const AR_BUTTON_ACTIVE_SX = {
-  ...AR_BUTTON_BASE_SX,
-  color: 'primary.main',
-} as const;
-
-const AR_BUTTON_INACTIVE_SX = {
-  ...AR_BUTTON_BASE_SX,
-  color: 'text.secondary',
-} as const;
-
 interface HierarchyToolbarProps {
   rows: FlatRow[];
   totalRows: number;
@@ -93,13 +72,13 @@ export function HierarchyToolbar({
   const rowsById = useHierarchyStore(s => s.rowsById);
   const usedQueryId = useHierarchyStore(s => s.usedQueryId);
   const matchedIds = useHierarchyStore(s => s.matchedIds);
-  const matchesUnavailable = !usedQueryId || matchedIds === null;
+  const matchesAvailable = !!usedQueryId && matchedIds !== null;
   const facets = useMemo(() => getFacetValues(rowsById), [rowsById]);
   const [localText, setLocalText] = useState(filter.text);
   const debouncedText = useDebouncedValue(localText);
   const [copySuccess, setCopySuccess] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  const [arAnchor, setArAnchor] = useState<HTMLElement | null>(null);
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [colAnchor, setColAnchor] = useState<HTMLElement | null>(null);
 
   // Non-always columns — drives the Columns menu
@@ -159,33 +138,16 @@ export function HierarchyToolbar({
         }}
       />
 
-      {/* Filter menu */}
+      {/* Filter menu — Work Item Types / States / show-only-matches, all in one popover */}
       <FilterMenu
         availableTypes={facets.types}
         availableStates={facets.states}
         filter={filter}
         setFilter={setFilter}
+        matchesAvailable={matchesAvailable}
+        showOnlyMatches={showOnlyMatches}
+        onToggleShowOnlyMatches={toggleShowOnlyMatches}
       />
-
-      {/* Active filter chips */}
-      {filter.types.map(t => (
-        <Chip
-          key={t}
-          label={t}
-          size="small"
-          onDelete={() => setFilter({ types: filter.types.filter(x => x !== t) })}
-        />
-      ))}
-      {filter.states.map(s => (
-        <Chip
-          key={s}
-          label={s}
-          size="small"
-          color="primary"
-          variant="outlined"
-          onDelete={() => setFilter({ states: filter.states.filter(x => x !== s) })}
-        />
-      ))}
 
       <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
 
@@ -206,40 +168,31 @@ export function HierarchyToolbar({
 
       <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
 
-      {/* Segment 4: Refresh + auto-refresh */}
+      {/* Segment 4: Refresh + overflow (auto-refresh / export / copy / print) */}
       <Tooltip title="Refresh now">
         <IconButton size="small" onClick={onRefresh}><RefreshIcon fontSize="small" /></IconButton>
       </Tooltip>
-      <Tooltip title={currentArOpt.tooltipLabel} disableHoverListener={Boolean(arAnchor)}>
-        <Button
-          size="small"
-          onClick={e => setArAnchor(e.currentTarget)}
-          startIcon={
-            <AutorenewIcon sx={{ fontSize: '14px !important', color: arActive ? 'primary.main' : 'text.disabled' }} />
-          }
-          endIcon={<KeyboardArrowDownIcon sx={{ fontSize: '14px !important' }} />}
-          sx={arActive ? AR_BUTTON_ACTIVE_SX : AR_BUTTON_INACTIVE_SX}
-        >
-          {`Auto-refresh: ${currentArOpt.label}`}
-        </Button>
+      <Tooltip title={arActive ? `Auto-refresh: ${currentArOpt.label} — more actions` : 'More actions'} disableHoverListener={Boolean(moreAnchor)}>
+        <IconButton size="small" onClick={e => setMoreAnchor(e.currentTarget)}>
+          <MoreVertIcon fontSize="small" sx={{ color: arActive ? 'primary.main' : 'inherit' }} />
+        </IconButton>
       </Tooltip>
       <Menu
-        anchorEl={arAnchor}
-        open={Boolean(arAnchor)}
-        onClose={() => setArAnchor(null)}
+        anchorEl={moreAnchor}
+        open={Boolean(moreAnchor)}
+        onClose={() => setMoreAnchor(null)}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
       >
         <Typography variant="caption" sx={{ px: 2, pt: 0.75, pb: 0.25, display: 'block', fontWeight: 600, color: 'text.secondary' }}>
           Auto-refresh
         </Typography>
-        <Divider sx={{ mb: 0.5 }} />
         {AUTO_REFRESH_OPTIONS.map(opt => (
           <MenuItem
             key={opt.value}
             dense
             selected={opt.value === autoRefreshMs}
-            onClick={() => { setAutoRefreshMs(opt.value); setArAnchor(null); }}
+            onClick={() => { setAutoRefreshMs(opt.value); setMoreAnchor(null); }}
           >
             <ListItemIcon sx={{ minWidth: 28 }}>
               {opt.value === autoRefreshMs ? <CheckIcon fontSize="small" color="primary" /> : null}
@@ -247,33 +200,24 @@ export function HierarchyToolbar({
             {opt.menuLabel}
           </MenuItem>
         ))}
+        <Divider sx={{ my: 0.5 }} />
+        <MenuItem dense onClick={() => { handleExport(); setMoreAnchor(null); }}>
+          <ListItemIcon sx={{ minWidth: 28 }}><DownloadIcon fontSize="small" /></ListItemIcon>
+          Export CSV
+        </MenuItem>
+        <MenuItem dense disabled={isCopying} onClick={() => { void handleCopy(); setMoreAnchor(null); }}>
+          <ListItemIcon sx={{ minWidth: 28 }}><ContentCopyIcon fontSize="small" /></ListItemIcon>
+          Copy to clipboard
+        </MenuItem>
+        <MenuItem dense onClick={() => { window.print(); setMoreAnchor(null); }}>
+          <ListItemIcon sx={{ minWidth: 28 }}><PrintIcon fontSize="small" /></ListItemIcon>
+          Print
+        </MenuItem>
       </Menu>
 
       <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
 
-      {!matchesUnavailable && (
-        <>
-          <Tooltip title={showOnlyMatches ? 'Showing only query matches — click to show full tree' : 'Show only query matches (dims ADO-added ancestor/sibling scaffolding)'}>
-            <IconButton size="small" onClick={toggleShowOnlyMatches}>
-              <FilterAltIcon fontSize="small" sx={{ color: showOnlyMatches ? 'primary.main' : 'text.disabled' }} />
-            </IconButton>
-          </Tooltip>
-          <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
-        </>
-      )}
-
-      {/* Segment 5: Export + density */}
-      <Tooltip title="Export CSV">
-        <IconButton size="small" onClick={handleExport}><DownloadIcon fontSize="small" /></IconButton>
-      </Tooltip>
-      <Tooltip title="Copy to clipboard">
-        <IconButton size="small" onClick={() => { void handleCopy(); }} disabled={isCopying}>
-          <ContentCopyIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Print">
-        <IconButton size="small" onClick={() => window.print()}><PrintIcon fontSize="small" /></IconButton>
-      </Tooltip>
+      {/* Segment 5: Density + columns (view-state controls reached for repeatedly — kept direct) */}
       <Tooltip title={`Density: ${density}`}>
         <IconButton size="small" onClick={() => setDensity(density === 'comfortable' ? 'compact' : 'comfortable')}>
           {density === 'compact' ? <DensitySmallIcon fontSize="small" /> : <DensityMediumIcon fontSize="small" />}

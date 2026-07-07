@@ -15,6 +15,8 @@ interface BuildNode {
   isRef?: boolean;
   linkOrigin?: 'query' | 'link';
   isQueryMatch?: boolean;
+  /** Ids of ancestors a dropped (would-cycle) edge on this node pointed back to. */
+  cutCycles?: number[];
   children: BuildNode[];
 }
 
@@ -67,7 +69,13 @@ export function buildTree(
     }
 
     const edge = edges[frame.edgeIdx++];
-    if (path.has(edge.childId)) continue; // cycle on this branch
+    if (path.has(edge.childId)) {
+      // Cycle on this branch — edge dropped to avoid infinite recursion. Record it
+      // on the current node so the UI can surface that a link was silently cut,
+      // rather than a child disappearing with no indication (see cutCycles on TreeNode).
+      (node.cutCycles ??= []).push(edge.childId);
+      continue;
+    }
 
     const childBuild: BuildNode = {
       id: edge.childId,
@@ -96,7 +104,7 @@ export function buildTree(
   }
   buildOrder.reverse(); // children before parents
 
-  interface LeafAcc { totalLeaves: number; closedLeaves: number; effortTotal: number; completedWorkTotal: number; remainingWorkTotal: number; }
+  interface LeafAcc { totalLeaves: number; closedLeaves: number; effortTotal: number; completedWorkTotal: number; remainingWorkTotal: number; originalEstimateTotal: number; overdueCount: number; }
   const nodeAcc = new Map<BuildNode, LeafAcc>();
   const builtNodes = new Map<BuildNode, TreeNode>();
   const lower = closedState.toLowerCase();
@@ -106,6 +114,13 @@ export function buildTree(
     const effort = typeof item.effort === 'number' && Number.isFinite(item.effort) ? item.effort : 0;
     const ownCompleted = typeof item.completedWork === 'number' && Number.isFinite(item.completedWork) ? item.completedWork : 0;
     const ownRemaining = typeof item.remainingWork === 'number' && Number.isFinite(item.remainingWork) ? item.remainingWork : 0;
+    const ownOriginalEstimate = typeof item.originalEstimate === 'number' && Number.isFinite(item.originalEstimate) ? item.originalEstimate : 0;
+    // Own-item deviation flag — independent of any rollup sum. Summing completed/estimate
+    // across a subtree can net an over-estimate task against an under-estimate one and
+    // hide both (e.g. +5h over cancels -5h under to a "done"-looking net of 0). This count
+    // can never be cancelled out: it only ever grows as it rolls up, so a single overdue
+    // item stays visible at every ancestor level regardless of what else is in the subtree.
+    const ownOverdue = ownOriginalEstimate > 0 && ownCompleted > ownOriginalEstimate ? 1 : 0;
 
     const nonRefChildren = n.children.filter(c => !c.isRef);
 
@@ -114,6 +129,8 @@ export function buildTree(
     let effortTotal = effort;
     let completedWorkTotal = ownCompleted;
     let remainingWorkTotal = ownRemaining;
+    let originalEstimateTotal = ownOriginalEstimate;
+    let overdueCount = ownOverdue;
 
     if (nonRefChildren.length === 0) {
       // Leaf node (or only ref children)
@@ -127,6 +144,8 @@ export function buildTree(
         effortTotal += ca.effortTotal;
         completedWorkTotal += ca.completedWorkTotal;
         remainingWorkTotal += ca.remainingWorkTotal;
+        originalEstimateTotal += ca.originalEstimateTotal;
+        overdueCount += ca.overdueCount;
       }
     }
 
@@ -146,6 +165,8 @@ export function buildTree(
       totalLeaves,
       completedWorkTotal,
       remainingWorkTotal,
+      originalEstimateTotal,
+      overdueCount,
       children: n.children.map(c => builtNodes.get(c)!),
       assignedTo: item.assignedTo,
       areaPath: item.areaPath,
@@ -160,9 +181,10 @@ export function buildTree(
       isRef: n.isRef,
       linkOrigin: n.linkOrigin,
       isQueryMatch: n.isQueryMatch,
+      cutCycles: n.cutCycles,
     };
 
-    nodeAcc.set(n, { effortTotal, completedWorkTotal, remainingWorkTotal, totalLeaves, closedLeaves });
+    nodeAcc.set(n, { effortTotal, completedWorkTotal, remainingWorkTotal, originalEstimateTotal, overdueCount, totalLeaves, closedLeaves });
     builtNodes.set(n, treeNode);
   }
 

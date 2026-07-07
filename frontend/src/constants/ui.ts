@@ -11,6 +11,11 @@ export const ROW_HEIGHT = { comfortable: 48, compact: 36 } as const;
 // Items threshold above which graph/tree computation is offloaded to a Web Worker
 export const WORKER_THRESHOLD = 1500;
 
+// Below this viewport width (e.g. a narrow ADO extension hub panel), the sidebar
+// auto-collapses, density switches to compact, and tree indentation shrinks so
+// the table stays usable instead of forcing heavy horizontal scroll.
+export const NARROW_VIEWPORT_PX = 700;
+
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 export const AUTO_REFRESH_OPTIONS = [

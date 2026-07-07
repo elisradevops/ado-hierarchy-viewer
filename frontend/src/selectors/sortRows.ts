@@ -1,8 +1,8 @@
 import type { FlatRow } from '../types';
 
-export type SortCol = 'id' | 'type' | 'title' | 'state' | 'progressPct' | 'effort' | 'effortTotal'
+export type SortCol = 'id' | 'type' | 'title' | 'state' | 'progressPct'
   | 'assignedTo' | 'areaPath' | 'iterationPath' | 'storyPoints' | 'remainingWork'
-  | 'originalEstimate' | 'priority' | 'tags';
+  | 'originalEstimate' | 'completedWork' | 'priority' | 'tags';
 
 function compareValue(a: FlatRow, b: FlatRow, col: SortCol, dir: 'asc' | 'desc'): number {
   const mult = dir === 'asc' ? 1 : -1;
@@ -15,8 +15,6 @@ function compareValue(a: FlatRow, b: FlatRow, col: SortCol, dir: 'asc' | 'desc')
     case 'title':           return mult * an.title.localeCompare(bn.title);
     case 'state':           return mult * an.state.localeCompare(bn.state);
     case 'progressPct':     return mult * (an.progressPct - bn.progressPct);
-    case 'effort':          return mult * (an.effort - bn.effort);
-    case 'effortTotal':     return mult * (an.effortTotal - bn.effortTotal);
     case 'assignedTo':      return mult * (an.assignedTo ?? '').localeCompare(bn.assignedTo ?? '');
     case 'areaPath':        return mult * (an.areaPath ?? '').localeCompare(bn.areaPath ?? '');
     case 'iterationPath':   return mult * (an.iterationPath ?? '').localeCompare(bn.iterationPath ?? '');
@@ -24,6 +22,7 @@ function compareValue(a: FlatRow, b: FlatRow, col: SortCol, dir: 'asc' | 'desc')
     case 'storyPoints':     return mult * ((an.storyPoints ?? 0) - (bn.storyPoints ?? 0));
     case 'remainingWork':   return mult * ((an.remainingWork ?? 0) - (bn.remainingWork ?? 0));
     case 'originalEstimate':return mult * ((an.originalEstimate ?? 0) - (bn.originalEstimate ?? 0));
+    case 'completedWork':   return mult * ((an.completedWork ?? 0) - (bn.completedWork ?? 0));
     case 'priority':        return mult * ((an.priority ?? 0) - (bn.priority ?? 0));
     default: return 0;
   }

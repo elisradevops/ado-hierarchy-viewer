@@ -12,12 +12,8 @@ import { getClient } from 'azure-devops-extension-api';
 import {
   WorkItemTrackingRestClient,
   QueryExpand,
-  QueryType,
-  LinkQueryMode,
-  LogicalOperation,
   WorkItemErrorPolicy,
   WorkItemBatchGetRequest,
-  type WorkItemQueryClause,
 } from 'azure-devops-extension-api/WorkItemTracking';
 
 import * as SDK from 'azure-devops-extension-sdk';
@@ -26,6 +22,14 @@ import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode } from '..
 import type { HierarchyConfig } from '../types';
 import type { WorkItemTypeMeta } from '../state/workItemMetaStore';
 import { BATCH_SIZE, buildWiFields, DEFAULT_EFFORT_FIELD } from '../constants/fields';
+import { mapWithConcurrency } from '../utils/concurrency';
+import {
+  renderClauseTree,
+  isDoesNotContainMode,
+  unionAndFilterMatches,
+  normalizeQueryType,
+  type WorkItemQueryClause,
+} from '@ado-hierarchy-viewer/query-match-core';
 
 // ─── Auth error broadcast ──────────────────────────────────────────────────
 
@@ -174,6 +178,10 @@ const strOrUndef = (f: Record<string, unknown>, key: string): string | undefined
   return String(v);
 };
 
+// Mirrors the BFF's ADO_CONCURRENCY default (bff/src/config/index.ts) — caps how many
+// getWorkItemsBatch calls are in flight at once instead of awaiting chunks serially.
+const BATCH_FETCH_CONCURRENCY = 8;
+
 async function fetchWorkItemsBatchDirect(
   project: string,
   ids: number[],
@@ -184,19 +192,18 @@ async function fetchWorkItemsBatchDirect(
   if (ids.length === 0) return [];
 
   const client = getClient(WorkItemTrackingRestClient);
-  const allItems: WorkItem[] = [];
 
   const chunks: number[][] = [];
   for (let i = 0; i < ids.length; i += BATCH_SIZE) {
     chunks.push(ids.slice(i, i + BATCH_SIZE));
   }
 
-  for (const chunk of chunks) {
-    if (signal?.aborted) break;
+  const chunkResults = await mapWithConcurrency(chunks, BATCH_FETCH_CONCURRENCY, async (chunk): Promise<WorkItem[]> => {
+    if (signal?.aborted) return [];
     const req = { ids: chunk, fields, errorPolicy: WorkItemErrorPolicy.Omit } as WorkItemBatchGetRequest;
     const raw = await client.getWorkItemsBatch(req, project);
 
-    const mapped = (raw ?? []).map((wi): WorkItem => {
+    return (raw ?? []).map((wi): WorkItem => {
       const f = (wi.fields ?? {}) as Record<string, unknown>;
       const resolvedEffort = effortField ?? DEFAULT_EFFORT_FIELD;
       const effortRaw = f[resolvedEffort];
@@ -220,105 +227,24 @@ async function fetchWorkItemsBatchDirect(
         url: wi.url,
       };
     });
-    allItems.push(...mapped);
-  }
-  return allItems;
+  });
+
+  return chunkResults.flat();
 }
 
-// ─── Query match derivation (extension-mode mirror of bff/queryMatchDerivation.ts) ──
+// ─── Query match derivation ─────────────────────────────────────────────────
 //
 // ADO tree/oneHop queries can pull in ancestor/sibling scaffolding beyond the actual
 // filter matches. There's no per-item "this is a real match" flag in the WIQL execution
 // response, so matches are independently re-derived by rendering the query's own filter
 // clauses (sourceClauses/targetClauses) as standalone flat WIQL and executing them.
 // Fail-closed: any clause bucket we can't safely render/execute returns null for that
-// bucket rather than guessing. See bff/src/services/queryMatchDerivation.ts for the
-// server-side twin of this logic (duplicated here per this file's existing BFF-mirroring
-// convention, e.g. fetchRelationsDirect mirroring fetchLinks).
-
-// Maps ADO's structured-clause operator reference names (e.g. "SupportedOperations.Equals")
-// to their literal WIQL syntax token. Empirically confirmed against a real ADO Server
-// response: operators come back as these semantic reference names, NOT literal symbols.
-// Anything not in this map bails (fail-closed) — a wrong mapping would only ever produce
-// invalid WIQL (caught as a request error → null), never a silently-wrong match set.
-const OPERATOR_TO_WIQL: Record<string, string> = {
-  'SupportedOperations.Equals': '=',
-  'SupportedOperations.NotEquals': '<>',
-  'SupportedOperations.GreaterThan': '>',
-  'SupportedOperations.LessThan': '<',
-  'SupportedOperations.GreaterThanEquals': '>=',
-  'SupportedOperations.LessThanEquals': '<=',
-  'SupportedOperations.Contains': 'Contains',
-  'SupportedOperations.ContainsWords': 'Contains Words',
-  'SupportedOperations.DoesNotContain': 'Does Not Contain',
-  'SupportedOperations.DoesNotContainWords': 'Does Not Contain Words',
-  'SupportedOperations.Under': 'Under',
-  'SupportedOperations.NotUnder': 'Not Under',
-  'SupportedOperations.In': 'In',
-  'SupportedOperations.NotIn': 'Not In',
-  'SupportedOperations.InGroup': 'In Group',
-  'SupportedOperations.NotInGroup': 'Not In Group',
-  'SupportedOperations.WasEver': 'Was Ever',
-};
-
-// Operators whose value is a comma-separated list needing per-item quoting/wrapping,
-// rather than a single literal.
-const LIST_OPERATORS = new Set(['In', 'Not In', 'In Group', 'Not In Group']);
-
-function escapeWiqlLiteral(value: string): string {
-  return value.replace(/'/g, "''");
-}
-
-function isUnresolvableMacro(value: string): boolean {
-  return /^@currentiterations?\b/i.test(value.trim());
-}
-
-function renderClauseTreeDirect(clause: WorkItemQueryClause | null | undefined): string | null {
-  if (!clause) return null;
-
-  if (clause.clauses && clause.clauses.length > 0) {
-    const rendered: string[] = [];
-    for (let i = 0; i < clause.clauses.length; i++) {
-      const child = clause.clauses[i];
-      const piece = renderClauseTreeDirect(child);
-      if (piece === null) return null;
-
-      if (i === 0) {
-        rendered.push(piece);
-      } else {
-        const op = child.logicalOperator === LogicalOperation.OR ? 'OR' : 'AND';
-        rendered.push(`${op} ${piece}`);
-      }
-    }
-    return `(${rendered.join(' ')})`;
-  }
-
-  const field = clause.field?.referenceName;
-  const operatorRef = clause.operator?.referenceName;
-  if (!field || !operatorRef) return null;
-  const wiqlOp = OPERATOR_TO_WIQL[operatorRef];
-  if (!wiqlOp) return null;
-
-  if (clause.isFieldValue) {
-    const fieldValueRef = clause.fieldValue?.referenceName;
-    if (!fieldValueRef) return null;
-    return `[${field}] ${wiqlOp} [${fieldValueRef}]`;
-  }
-
-  const rawValue = clause.value ?? '';
-  if (isUnresolvableMacro(rawValue)) return null;
-
-  if (LIST_OPERATORS.has(wiqlOp)) {
-    const items = rawValue.split(',').map(v => v.trim()).filter(Boolean);
-    if (items.length === 0) return null;
-    const rendered = items.map(v => `'${escapeWiqlLiteral(v)}'`).join(',');
-    return `[${field}] ${wiqlOp} (${rendered})`;
-  }
-
-  const isMacro = rawValue.trim().startsWith('@');
-  const rendered = isMacro ? rawValue.trim() : `'${escapeWiqlLiteral(rawValue)}'`;
-  return `[${field}] ${wiqlOp} ${rendered}`;
-}
+// bucket rather than guessing.
+//
+// Clause rendering, operator mapping, and mode-check logic live in the shared
+// @ado-hierarchy-viewer/query-match-core package — identical to the BFF's twin in
+// bff/src/services/queryMatchDerivation.ts. Only this function's actual transport
+// (SDK queryByWiql, vs the BFF's raw AdoClient.post) is extension-specific.
 
 async function executeClauseBucketAsFlatQueryDirect(
   project: string,
@@ -327,7 +253,7 @@ async function executeClauseBucketAsFlatQueryDirect(
 ): Promise<number[] | null> {
   if (!clauseTree || signal?.aborted) return null;
 
-  const rendered = renderClauseTreeDirect(clauseTree);
+  const rendered = renderClauseTree(clauseTree);
   if (rendered === null) return null;
 
   try {
@@ -351,10 +277,9 @@ async function deriveMatchedIdsDirect(
   if (queryDef.isInvalidSyntax) return null;
 
   // DoesNotContain modes invert match semantics — bail entirely rather than mislabel.
-  if (
-    queryDef.filterOptions === LinkQueryMode.LinksOneHopDoesNotContain ||
-    queryDef.filterOptions === LinkQueryMode.LinksRecursiveDoesNotContain
-  ) {
+  // filterOptions here is the numeric LinkQueryMode enum; isDoesNotContainMode already
+  // recognizes its DoesNotContain member values (3, 6) alongside the BFF's string form.
+  if (isDoesNotContainMode(queryDef.filterOptions)) {
     return null;
   }
 
@@ -363,10 +288,7 @@ async function deriveMatchedIdsDirect(
     executeClauseBucketAsFlatQueryDirect(project, queryDef.targetClauses, signal),
   ]);
 
-  if (sourceIds === null && targetIds === null) return null;
-
-  const union = new Set<number>([...(sourceIds ?? []), ...(targetIds ?? [])]);
-  return [...union].filter(id => presentIds.has(id));
+  return unionAndFilterMatches(sourceIds, targetIds, presentIds);
 }
 
 // ─── Query root IDs fetch ──────────────────────────────────────────────────
@@ -393,10 +315,13 @@ export async function fetchQueryRootIdsDirect(
 
     let rootIds: number[] = [];
     let queryRelations: WorkItemRelation[] = [];
-    // N1: compare against QueryType enum — SDK returns numeric (QueryType.Flat = 1)
-    if (result.queryType === QueryType.Flat && Array.isArray(result.workItems)) {
+    // Normalized against the same shared logic the BFF twin uses (which compares a
+    // lowercased string instead of the SDK's numeric QueryType enum) — removes the
+    // drift risk of two independent queryType comparisons silently diverging.
+    const normalizedQueryType = normalizeQueryType(result.queryType);
+    if (normalizedQueryType === 'flat' && Array.isArray(result.workItems)) {
       rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
-    } else if (result.queryType === QueryType.Tree && Array.isArray(result.workItemRelations)) {
+    } else if (normalizedQueryType === 'tree' && Array.isArray(result.workItemRelations)) {
       queryRelations = result.workItemRelations
         .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
         .map(r => ({ rel: r.rel ?? null, source: { id: r.source!.id }, target: { id: r.target!.id }, origin: 'query' as const }));
@@ -406,7 +331,7 @@ export async function fetchQueryRootIdsDirect(
         .filter(r => !childIds.has(r.source!.id))
         .map(r => r.source!.id)
         .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
-    } else if (result.queryType === QueryType.OneHop && Array.isArray(result.workItemRelations)) {
+    } else if (normalizedQueryType === 'oneHop' && Array.isArray(result.workItemRelations)) {
       // "Direct Links" queries: top-level items are marked by a null-source entry
       // { source: null, target: {id} }; actual one-hop links have both source and target.
       const seen = new Set<number>();
@@ -422,7 +347,7 @@ export async function fetchQueryRootIdsDirect(
     }
 
     let matchedIds: number[] | null;
-    if (result.queryType === QueryType.Flat) {
+    if (normalizedQueryType === 'flat') {
       // Flat queries return no scaffolding — every returned id is already an exact match.
       matchedIds = rootIds;
     } else {
@@ -521,8 +446,12 @@ export async function fetchHierarchyDirect(
   if (config.relationTypes.length > 0) {
     let frontier = [config.teamProject];
     for (let hop = 0; hop < MAX_PROJECT_HOPS && frontier.length > 0 && !signal?.aborted; hop++) {
-      const batches = await Promise.all(
-        frontier.map(p => fetchRelationsDirect('', '', p, config.relationTypes, signal))
+      // Bounded the same way as fetchWorkItemsBatchDirect above — an unusually wide
+      // frontier (many newly-discovered projects in one hop) shouldn't fire unlimited
+      // concurrent requests. fetchRelationsDirect already self-guards on signal.aborted
+      // at entry, so no extra abort plumbing is needed here.
+      const batches = await mapWithConcurrency(frontier, BATCH_FETCH_CONCURRENCY, p =>
+        fetchRelationsDirect('', '', p, config.relationTypes, signal)
       );
 
       const idsToResolve = new Set<number>();

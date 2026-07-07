@@ -35,6 +35,12 @@ export interface TreeNode {
   completedWork?: number | null;
   completedWorkTotal: number;
   remainingWorkTotal: number;
+  originalEstimateTotal: number;
+  /** Count of descendants (any depth, this subtree) whose own completedWork exceeded their
+   *  own originalEstimate. Unlike the *Total rollups above, this can never be cancelled out
+   *  by a sibling finishing early — it only ever grows climbing up the tree, so a single
+   *  overdue item stays visible at every ancestor level regardless of net sum. */
+  overdueCount: number;
   /** The relation type that linked this node to its parent (undefined for roots) */
   linkRel?: string;
   /** True when this node is a tagged reference (opposite-direction link) — not recursed */
@@ -43,6 +49,10 @@ export interface TreeNode {
   linkOrigin?: 'query' | 'link';
   /** True filter-match per the source query's own clauses (not ADO's ancestor/sibling scaffolding). Undefined when no query is active or matches are undeterminable. */
   isQueryMatch?: boolean;
+  /** Ids of ancestors that a link on this node would have cycled back to — dropped during
+   *  tree build to prevent infinite recursion (see treeBuilder.ts). Undefined/empty when
+   *  this node cut no cyclic edges. */
+  cutCycles?: number[];
 }
 
 export interface FlatRow {

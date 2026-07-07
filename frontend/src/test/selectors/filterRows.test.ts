@@ -15,6 +15,8 @@ function makeNode(id: number, overrides: Partial<TreeNode> = {}): Omit<TreeNode,
     totalLeaves: 0,
     completedWorkTotal: 0,
     remainingWorkTotal: 0,
+    originalEstimateTotal: 0,
+    overdueCount: 0,
     ...overrides,
   };
 }

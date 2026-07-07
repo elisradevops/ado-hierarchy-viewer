@@ -1,7 +1,8 @@
-import React, { useMemo, useState, useCallback, useRef } from 'react';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { Box, Paper, TableSortLabel } from '@mui/material';
 import { TreeRow, TYPE_ICON_IDS } from './TreeRow';
+import { requestResize } from '../adoSdk';
 import { buildWorkItemUrl } from '../utils/adoUrlUtils';
 import { HierarchyToolbar } from './HierarchyToolbar';
 import { EmptyState } from './EmptyState';
@@ -11,6 +12,8 @@ import { useConfigStore } from '../state/configStore';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { useExpandCollapse } from '../hooks/useExpandCollapse';
 import { useKeyboardNav } from '../hooks/useKeyboardNav';
+import { useIsNarrowViewport } from '../hooks/useIsNarrowViewport';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { flattenTree } from '../selectors/flattenTree';
 import { filterRows } from '../selectors/filterRows';
 import { sortRows, type SortCol } from '../selectors/sortRows';
@@ -60,7 +63,11 @@ const RESIZE_HANDLE_SX = {
 const SCROLL_OUTER_SX = { flexGrow: 1, overflowX: 'auto', overflowY: 'hidden' } as const;
 // Inner: enforces minimum table width so columns never collapse below readable size
 const SCROLL_INNER_SX = { height: '100%', display: 'flex', flexDirection: 'column' as const };
-const BODY_WRAPPER_SX = { flexGrow: 1, overflow: 'hidden' } as const;
+const BODY_WRAPPER_SX = {
+  flexGrow: 1,
+  overflow: 'hidden',
+  '&:focus-visible': { outline: '2px solid #1B458F', outlineOffset: -2 },
+} as const;
 // Virtuoso's default scroller sets overflowY:auto but leaves overflowX unset.
 // Per CSS spec, setting one overflow axis non-visible promotes the other from 'visible'→'auto',
 // which creates a spurious second horizontal scrollbar inside SCROLL_OUTER.
@@ -142,16 +149,31 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
   const activeIdRef = useRef<number | null>(null);
   activeIdRef.current = activeId;
 
+  const isNarrow = useIsNarrowViewport();
+
+  // Tree container owns keyboard focus (aria-activedescendant pattern) rather than
+  // each row being an individual tab stop — the row list is virtualized, so the
+  // "active" row may not even exist in the DOM; a per-row roving tabindex would
+  // break the moment it scrolled out of view.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
   const roots = useMemo(
     () => rootIds.map(id => rowsById[id]).filter(Boolean),
     [rootIds, rowsById]
   );
 
+  // When a filter is active, a match nested under a collapsed ancestor must still be
+  // findable — flattenTree only emits nodes it actually walks, so collapsed subtrees
+  // are otherwise invisible to filterRows entirely (not merely "filtered out"). Forcing
+  // a full-tree flatten here and letting filterRows prune back to matches + their
+  // ancestors is what makes filtering surface results regardless of expand/collapse state.
+  const hasActiveFilter = !!(filter.text || filter.types.length > 0 || filter.states.length > 0 || showOnlyMatches);
+
   const visibleRows: FlatRow[] = useMemo(() => {
-    const flat = flattenTree(roots, expandedIds);
+    const flat = flattenTree(roots, expandedIds, hasActiveFilter);
     const filtered = filterRows(flat, { ...filter, matchesOnly: showOnlyMatches });
     return sortRows(filtered, sort.col as SortCol, sort.dir);
-  }, [roots, expandedIds, filter, showOnlyMatches, sort]);
+  }, [roots, expandedIds, filter, showOnlyMatches, sort, hasActiveFilter]);
 
   // #4: memoize O(N) findIndex so it only runs when visibleRows or activeId changes
   const activeIndex = useMemo(
@@ -161,7 +183,12 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
 
   // #5: stable callbacks so React.memo on TreeRow actually skips re-renders
   const handleToggle = useCallback((id: number): void => toggle(id), [toggle]);
-  const handleActivate = useCallback((id: number): void => setActiveId(id), []);
+  const handleActivate = useCallback((id: number): void => {
+    setActiveId(id);
+    // Row itself is not focusable (tabIndex=-1, see TreeRow) — clicking a row must
+    // still move DOM focus onto the tree container so keyboard nav continues to work.
+    bodyRef.current?.focus();
+  }, []);
 
   // Column resize: pointer-drag on the header resize handle
   const rafRef = useRef<number | null>(null);
@@ -181,8 +208,14 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
     window.addEventListener('pointerup', onUp);
   }, [setColWidth]);
 
+  // Lightweight per-row shape for directional keyboard nav (Left->parent, Right->first child).
+  const keyboardNavRows = useMemo(
+    () => visibleRows.map(r => ({ id: r.node.id, depth: r.depth, hasChildren: r.hasChildren, isExpanded: r.isExpanded, parentId: r.parentId })),
+    [visibleRows]
+  );
+
   const { onKeyDown } = useKeyboardNav({
-    rowCount: visibleRows.length,
+    rows: keyboardNavRows,
     activeIndex,
     onSetActive: (idx) => setActiveId(visibleRows[idx]?.node.id ?? null),
     onToggleExpand: (idx) => { const row = visibleRows[idx]; if (row) toggle(row.node.id); },
@@ -191,6 +224,19 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
       if (row) window.open(buildWorkItemUrl(orgUrl, teamProject, row.node.id), '_blank', 'noopener');
     },
   });
+
+  const activeDomId = activeId !== null ? `tree-row-${activeId}` : undefined;
+
+  // Ask the ADO host to resize the hub iframe whenever the rendered content's
+  // height could have changed — visible row count (data load, expand/collapse,
+  // filtering) or density (row height). Debounced so rapid changes (e.g. typing
+  // into the search filter, which re-narrows visibleRows on every keystroke) collapse
+  // into one resize call instead of firing the SDK's cross-frame call on every keystroke.
+  // No-op outside the extension host.
+  const debouncedRowCount = useDebouncedValue(visibleRows.length);
+  useEffect(() => {
+    requestResize();
+  }, [debouncedRowCount, density]);
 
   const handleColSort = (col: SortCol): void => {
     setSort({ col, dir: sort.col === col && sort.dir === 'asc' ? 'desc' : 'asc' });
@@ -217,8 +263,9 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
       apiTypeIconUrls={apiTypeIconUrls}
       visibleColumns={visibleColumns}
       gridCols={gridCols}
+      isNarrow={isNarrow}
     />
-  ), [orgUrl, teamProject, density, handleToggle, handleActivate, apiTypeColors, apiTypeIconUrls, visibleColumns, gridCols]);
+  ), [orgUrl, teamProject, density, handleToggle, handleActivate, apiTypeColors, apiTypeIconUrls, visibleColumns, gridCols, isNarrow]);
 
   return (
     <Paper sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -261,8 +308,19 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
             ))}
           </Box>
 
-          {/* Virtual body — each row rendered by TreeRow using the same gridCols */}
-          <Box sx={BODY_WRAPPER_SX} onKeyDown={onKeyDown}>
+          {/* Virtual body — each row rendered by TreeRow using the same gridCols.
+              role=tree + aria-activedescendant: the container is the sole tab stop and
+              communicates the "focused" row to assistive tech via id reference, since the
+              row list is virtualized and a per-row roving tabindex can't survive scrolling. */}
+          <Box
+            ref={bodyRef}
+            sx={BODY_WRAPPER_SX}
+            onKeyDown={onKeyDown}
+            role="tree"
+            aria-label="Work item hierarchy"
+            tabIndex={0}
+            aria-activedescendant={activeDomId}
+          >
             <Virtuoso
               data={visibleRows}
               itemContent={renderRow}

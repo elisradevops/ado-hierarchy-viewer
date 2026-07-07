@@ -9,7 +9,7 @@ function escapeCsv(value: unknown): string {
   return str;
 }
 
-const CSV_HEADERS = ['ID', 'Type', 'Title', 'State', 'Progress %', 'Effort', 'Total Effort'];
+const CSV_HEADERS = ['ID', 'Type', 'Title', 'State', 'Progress %', 'Original Estimate', 'Remaining Work', 'Completed Work'];
 
 export function flatRowsToCsv(rows: FlatRow[]): string {
   const lines: string[] = [CSV_HEADERS.join(',')];
@@ -22,8 +22,9 @@ export function flatRowsToCsv(rows: FlatRow[]): string {
         escapeCsv(`${indent}${node.title}`),
         escapeCsv(node.state),
         escapeCsv(safeToFixed(node.progressPct, 1)),
-        escapeCsv(node.effort),
-        escapeCsv(node.effortTotal),
+        escapeCsv(node.originalEstimate),
+        escapeCsv(node.remainingWork),
+        escapeCsv(node.completedWork),
       ].join(',')
     );
   }

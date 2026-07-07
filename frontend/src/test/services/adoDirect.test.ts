@@ -436,4 +436,31 @@ describe('fetchHierarchyDirect', () => {
     expect(result.workItems.map(w => w.id).sort()).toEqual([1, 2, 3]);
     expect(result.workItemRelations).toHaveLength(2);
   });
+
+  it('perf: batch-fetches ids in concurrent chunks and merges every chunk\'s results (was serial)', async () => {
+    // 251 distinct ids (source 1 + targets 2..251) → ceil(251/BATCH_SIZE=200) = 2 chunks.
+    const CHILD_COUNT = 250;
+    const relations = Array.from({ length: CHILD_COUNT }, (_, i) => ({
+      rel: 'Child', source: { id: 1 }, target: { id: i + 2 },
+    }));
+    witStub.queryByWiql.mockResolvedValue({ workItemRelations: relations });
+    witStub.getWorkItemsBatch.mockImplementation(async (req: { ids: number[] }) =>
+      req.ids.map(id => ({
+        id,
+        fields: { 'System.WorkItemType': 'Task', 'System.Title': `Item ${id}`, 'System.State': 'Active', 'System.TeamProject': 'Proj' },
+        url: '',
+      }))
+    );
+
+    const config = {
+      teamProject: 'Proj', relationTypes: ['Child'], queryId: '',
+      effortField: '', closedState: 'Closed', topLevelType: '',
+    };
+    const result = await fetchHierarchyDirect(config, '', '');
+
+    expect(witStub.getWorkItemsBatch).toHaveBeenCalledTimes(2);
+    // All ids across both chunks must be present — no drops from parallelizing the loop.
+    expect(result.workItems).toHaveLength(CHILD_COUNT + 1);
+    expect(new Set(result.workItems.map(w => w.id)).size).toBe(CHILD_COUNT + 1);
+  });
 });

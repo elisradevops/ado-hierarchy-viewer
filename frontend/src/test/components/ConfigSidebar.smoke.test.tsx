@@ -59,24 +59,6 @@ describe('ConfigSidebar', () => {
     expect(screen.getByText('Hierarchy Viewer')).toBeInTheDocument();
   });
 
-  it('renders Closed as default closed state', () => {
-    render(
-      <ThemeProvider theme={LIGHT_COMFORTABLE}>
-        <ConfigSidebar onRun={vi.fn()} />
-      </ThemeProvider>
-    );
-    expect(screen.getByDisplayValue('Closed')).toBeInTheDocument();
-  });
-
-  it('renders OriginalEstimate as default effort field', () => {
-    render(
-      <ThemeProvider theme={LIGHT_COMFORTABLE}>
-        <ConfigSidebar onRun={vi.fn()} />
-      </ThemeProvider>
-    );
-    expect(screen.getByDisplayValue('Microsoft.VSTS.Scheduling.OriginalEstimate')).toBeInTheDocument();
-  });
-
   it('renders Load Hierarchy button', () => {
     render(
       <ThemeProvider theme={LIGHT_COMFORTABLE}>

@@ -7,8 +7,6 @@ import { useWorkItemMetaStore } from '../state/workItemMetaStore';
 
 interface HierarchySummaryProps {
   stats: SummaryStats;
-  onFilterByType?: (type: string) => void;
-  onFilterByState?: (state: string) => void;
 }
 
 // Vertical sidebar layout
@@ -63,16 +61,16 @@ const CHIP_WRAP_SX = {
   gap: 0.5,
 } as const;
 
+// Read-only stat chips — filtering by type/state lives solely in the toolbar's
+// FilterMenu now, so these are informational only (no onClick, no active state).
 function buildTypeChipSx(color: string) {
   return {
     fontSize: '0.65rem',
     height: 18,
-    cursor: 'pointer',
     backgroundColor: alpha(color, 0.1),
     color,
     border: `1px solid ${alpha(color, 0.25)}`,
     '& .MuiChip-label': { px: '6px', fontWeight: 600 },
-    '&:hover': { backgroundColor: alpha(color, 0.18) },
   };
 }
 
@@ -80,12 +78,10 @@ function buildStateChipSx(color: string) {
   return {
     fontSize: '0.65rem',
     height: 18,
-    cursor: 'pointer',
     backgroundColor: alpha(color, 0.1),
     color,
     border: `1px solid ${alpha(color, 0.25)}`,
     '& .MuiChip-label': { px: '6px' },
-    '&:hover': { backgroundColor: alpha(color, 0.18) },
   };
 }
 
@@ -98,8 +94,6 @@ function getProgressColor(value: number): string {
 
 export const HierarchySummary = React.memo(function HierarchySummary({
   stats,
-  onFilterByType,
-  onFilterByState,
 }: HierarchySummaryProps): React.ReactElement {
   const { totalItems, overallProgressPct, totalEffort, completedLeaves, totalLeaves, byType, byState } = stats;
   const apiTypeColors = useWorkItemMetaStore(s => s.typeColors);
@@ -135,7 +129,7 @@ export const HierarchySummary = React.memo(function HierarchySummary({
       <Box sx={STAT_ROW_SX}>
         <Typography sx={STAT_LABEL_SX}>{totalItems} items</Typography>
         {totalEffort > 0 && (
-          <Typography sx={STAT_LABEL_SX}>{totalEffort} pts</Typography>
+          <Typography sx={STAT_LABEL_SX}>{totalEffort}h effort</Typography>
         )}
       </Box>
 
@@ -158,7 +152,6 @@ export const HierarchySummary = React.memo(function HierarchySummary({
                   label={`${type} ${count}`}
                   size="small"
                   sx={typeChipSxMap[type]}
-                  onClick={onFilterByType ? () => onFilterByType(type) : undefined}
                 />
             ))}
           </Box>
@@ -174,7 +167,6 @@ export const HierarchySummary = React.memo(function HierarchySummary({
                 label={`${state} ${count}`}
                 size="small"
                 sx={stateChipSxMap[state]}
-                onClick={onFilterByState ? () => onFilterByState(state) : undefined}
               />
           ))}
         </Box>

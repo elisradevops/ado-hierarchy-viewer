@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ado-hierarchy-viewer/query-match-core": "file:../packages/query-match-core",
     "@emotion/react": "^11",
     "@emotion/styled": "^11",
     "@mui/icons-material": "^7.3.2",
