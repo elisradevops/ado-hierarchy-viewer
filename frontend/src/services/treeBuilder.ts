@@ -13,6 +13,8 @@ interface BuildNode {
   item: WorkItem;
   linkRel?: string;
   isRef?: boolean;
+  linkOrigin?: 'query' | 'link';
+  isQueryMatch?: boolean;
   children: BuildNode[];
 }
 
@@ -22,12 +24,14 @@ export function buildTree(
   itemsById: Record<number, WorkItem>,
   closedState: string,
   _visited: Set<number> = new Set(),
+  matchedIds?: Set<number>,
 ): TreeNode | null {
   if (_visited.has(rootId)) return null; // cycle guard at root (used by tests)
 
   const rootBuild: BuildNode = {
     id: rootId,
     item: itemsById[rootId] ?? makePlaceholder(rootId),
+    isQueryMatch: matchedIds?.has(rootId),
     children: [],
   };
 
@@ -70,6 +74,8 @@ export function buildTree(
       item: itemsById[edge.childId] ?? makePlaceholder(edge.childId),
       linkRel: edge.rel,
       isRef: edge.isRef,
+      linkOrigin: edge.origin,
+      isQueryMatch: matchedIds?.has(edge.childId),
       children: [],
     };
     node.children.push(childBuild);
@@ -136,6 +142,8 @@ export function buildTree(
       effort,
       effortTotal,
       progressPct,
+      closedLeaves,
+      totalLeaves,
       completedWorkTotal,
       remainingWorkTotal,
       children: n.children.map(c => builtNodes.get(c)!),
@@ -150,6 +158,8 @@ export function buildTree(
       completedWork: item.completedWork,
       linkRel: n.linkRel,
       isRef: n.isRef,
+      linkOrigin: n.linkOrigin,
+      isQueryMatch: n.isQueryMatch,
     };
 
     nodeAcc.set(n, { effortTotal, completedWorkTotal, remainingWorkTotal, totalLeaves, closedLeaves });

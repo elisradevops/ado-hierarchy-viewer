@@ -2,6 +2,8 @@ export interface WorkItemRelation {
   rel: string | null;
   source: { id: number; url?: string } | null;
   target: { id: number; url?: string } | null;
+  /** 'query' = came from the saved query's own tree structure; 'link' = discovered via selected link types */
+  origin?: 'query' | 'link';
 }
 
 export interface WorkItem {

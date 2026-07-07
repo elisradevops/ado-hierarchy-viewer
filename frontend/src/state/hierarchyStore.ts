@@ -10,9 +10,15 @@ interface HierarchyStore {
   error: string | null;
   lastFetchedAt: number | null;
   usedRelationTypes: string[];
+  /** Non-empty when the currently loaded hierarchy was seeded by a saved query — gates the "discovered via link type" badge */
+  usedQueryId: string;
+  /** True filter-match ids from the source query. Null = no query active or matches undeterminable (strict mode unavailable). */
+  matchedIds: number[] | null;
 
   setResult: (result: BuildHierarchyResult) => void;
   setUsedRelationTypes: (types: string[]) => void;
+  setUsedQueryId: (queryId: string) => void;
+  setMatchedIds: (matchedIds: number[] | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clear: () => void;
@@ -27,6 +33,8 @@ export const useHierarchyStore = create<HierarchyStore>((set) => ({
   error: null,
   lastFetchedAt: null,
   usedRelationTypes: [],
+  usedQueryId: '',
+  matchedIds: null,
 
   setResult: (result) => {
     // Build Record<number, TreeNode> for O(1) lookup — iterative DFS, stack-safe at any depth
@@ -50,7 +58,9 @@ export const useHierarchyStore = create<HierarchyStore>((set) => ({
   },
 
   setUsedRelationTypes: (types) => set({ usedRelationTypes: types }),
+  setUsedQueryId: (queryId) => set({ usedQueryId: queryId }),
+  setMatchedIds: (matchedIds) => set({ matchedIds }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error, loading: false }),
-  clear: () => set({ rootIds: [], rowsById: {}, rowCount: 0, orphanIds: [], loading: false, error: null, lastFetchedAt: null, usedRelationTypes: [] }),
+  clear: () => set({ rootIds: [], rowsById: {}, rowCount: 0, orphanIds: [], loading: false, error: null, lastFetchedAt: null, usedRelationTypes: [], usedQueryId: '', matchedIds: null }),
 }));

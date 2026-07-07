@@ -4,10 +4,14 @@ export interface FilterCriteria {
   text: string;
   types: string[];
   states: string[];
+  /** When true, only rows with isQueryMatch === true satisfy the filter (ancestors still retained for context). */
+  matchesOnly?: boolean;
 }
 
 function matchesFilter(row: FlatRow, criteria: FilterCriteria): boolean {
-  const { text, types, states } = criteria;
+  const { text, types, states, matchesOnly } = criteria;
+
+  if (matchesOnly && row.node.isQueryMatch !== true) return false;
 
   if (text) {
     const lower = text.toLowerCase();
@@ -23,8 +27,8 @@ function matchesFilter(row: FlatRow, criteria: FilterCriteria): boolean {
 }
 
 export function filterRows(rows: FlatRow[], criteria: FilterCriteria): FlatRow[] {
-  const { text, types, states } = criteria;
-  if (!text && types.length === 0 && states.length === 0) return rows;
+  const { text, types, states, matchesOnly } = criteria;
+  if (!text && types.length === 0 && states.length === 0 && !matchesOnly) return rows;
 
   // Find which rows match
   const matchSet = new Set<number>();

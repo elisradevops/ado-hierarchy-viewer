@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AdoClient } from '../services/AdoClient';
 import { extractCreds } from '../middleware/creds';
-import { fetchLinks, fetchWorkItems, fetchQueryRootIds } from '../services/HierarchyService';
+import { fetchLinks, fetchWorkItems, fetchQueryRootIds, type WorkItem, type WorkItemRelation } from '../services/HierarchyService';
 import {
   LinksRequestSchema,
   WorkItemsRequestSchema,
@@ -9,6 +9,8 @@ import {
 } from '../schemas/hierarchy.schema';
 
 const DEFAULT_EFFORT_FIELD = 'Microsoft.VSTS.Scheduling.OriginalEstimate';
+// Bounds the cross-project link-following BFS so a pathological/cyclic collection can't hang a request.
+const MAX_PROJECT_HOPS = 15;
 const BASE_WI_FIELDS = [
   'System.Id',
   'System.WorkItemType',
@@ -99,24 +101,81 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
     const client = new AdoClient(creds.token);
     const { project, relationTypes, effortField, queryId } = parsed.data;
     const fields = [...new Set([...BASE_WI_FIELDS, effortField ?? DEFAULT_EFFORT_FIELD])];
+    const resolvedEffortField = effortField ?? DEFAULT_EFFORT_FIELD;
 
     let queryRootIds: number[] | undefined;
+    let queryRelations: WorkItemRelation[] = [];
+    let matchedIds: number[] | null = null;
     if (queryId) {
-      queryRootIds = await fetchQueryRootIds(client, creds.orgUrl, project, queryId);
+      const q = await fetchQueryRootIds(client, creds.orgUrl, project, queryId);
+      queryRootIds = q.rootIds;
+      queryRelations = q.queryRelations;
+      matchedIds = q.matchedIds;
     }
 
-    const relations = relationTypes.length > 0
-      ? await fetchLinks(client, creds.orgUrl, project, relationTypes)
-      : [];
-    const idSet = new Set([
-      ...relations.filter(r => r.source).map(r => r.source!.id),
-      ...relations.filter(r => r.target).map(r => r.target!.id),
-    ]);
-    for (const id of (queryRootIds ?? [])) idSet.add(id);
-    const uniqueIds = [...idSet];
+    // Cross-project recursive link-follow: start from `project`, and whenever a newly
+    // resolved work item belongs to a project we haven't queried yet, fetch that
+    // project's own links too. Bounded by MAX_PROJECT_HOPS + shrinking frontier.
+    const linkRelationsByPair = new Map<string, WorkItemRelation>();
+    const resolvedItemsById = new Map<number, WorkItem>();
+    const knownProjects = new Set<string>([project]);
 
-    const workItems = await fetchWorkItems(client, creds.orgUrl, project, uniqueIds, fields, effortField ?? DEFAULT_EFFORT_FIELD);
-    res.json({ workItemRelations: relations, workItems, rootIds: queryRootIds });
+    if (relationTypes.length > 0) {
+      let frontier = [project];
+      for (let hop = 0; hop < MAX_PROJECT_HOPS && frontier.length > 0; hop++) {
+        const batches = await Promise.all(
+          frontier.map(p => fetchLinks(client, creds.orgUrl, p, relationTypes))
+        );
+
+        const idsToResolve = new Set<number>();
+        for (const rels of batches) {
+          for (const r of rels) {
+            if (!r.source || !r.target) continue;
+            const pairKey = `${r.source.id}-${r.target.id}`;
+            if (!linkRelationsByPair.has(pairKey)) {
+              linkRelationsByPair.set(pairKey, { ...r, origin: 'link' });
+            }
+            if (!resolvedItemsById.has(r.source.id)) idsToResolve.add(r.source.id);
+            if (!resolvedItemsById.has(r.target.id)) idsToResolve.add(r.target.id);
+          }
+        }
+
+        if (idsToResolve.size === 0) break;
+
+        const newItems = await fetchWorkItems(client, creds.orgUrl, project, [...idsToResolve], fields, resolvedEffortField);
+        const discoveredProjects = new Set<string>();
+        for (const item of newItems) {
+          resolvedItemsById.set(item.id, item);
+          if (item.teamProject && !knownProjects.has(item.teamProject)) {
+            knownProjects.add(item.teamProject);
+            discoveredProjects.add(item.teamProject);
+          }
+        }
+        frontier = [...discoveredProjects];
+      }
+    }
+
+    // Merge query-native edges with link-discovered edges — the query wins when both
+    // describe the same source→target pair (it's the "actual query result").
+    const mergedByPair = new Map<string, WorkItemRelation>();
+    for (const r of linkRelationsByPair.values()) mergedByPair.set(`${r.source!.id}-${r.target!.id}`, r);
+    for (const r of queryRelations) mergedByPair.set(`${r.source!.id}-${r.target!.id}`, r);
+    const relations = [...mergedByPair.values()];
+
+    const idSet = new Set<number>();
+    for (const r of relations) {
+      if (r.source) idSet.add(r.source.id);
+      if (r.target) idSet.add(r.target.id);
+    }
+    for (const id of (queryRootIds ?? [])) idSet.add(id);
+
+    const missingIds = [...idSet].filter(id => !resolvedItemsById.has(id));
+    const missingItems = missingIds.length > 0
+      ? await fetchWorkItems(client, creds.orgUrl, project, missingIds, fields, resolvedEffortField)
+      : [];
+    const workItems = [...resolvedItemsById.values(), ...missingItems];
+
+    res.json({ workItemRelations: relations, workItems, rootIds: queryRootIds, matchedIds });
   } catch (err) {
     next(err);
   }

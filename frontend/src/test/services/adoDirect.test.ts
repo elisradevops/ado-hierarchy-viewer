@@ -13,6 +13,7 @@ const witStub = {
   queryById: vi.fn(),
   getWorkItemsBatch: vi.fn(),
   getQueries: vi.fn(),
+  getQuery: vi.fn(),
 };
 const coreStub = {
   getProjects: vi.fn(),
@@ -41,6 +42,11 @@ vi.mock('azure-devops-extension-api/WorkItemTracking', async () => {
 
 vi.mock('azure-devops-extension-api/Core', () => ({
   CoreRestClient: class CoreRestClient {},
+}));
+
+const sdkWebContext = { project: { id: 'proj-1', name: 'Alpha' } };
+vi.mock('azure-devops-extension-sdk', () => ({
+  getWebContext: vi.fn(() => sdkWebContext),
 }));
 
 import {
@@ -93,13 +99,10 @@ describe('fetchRelationTypesDirect', () => {
 // ── fetchProjectsDirect ────────────────────────────────────────────────────
 
 describe('fetchProjectsDirect', () => {
-  it('maps SDK projects to id+name shape', async () => {
-    coreStub.getProjects.mockResolvedValue([
-      { id: 'proj-1', name: 'Alpha' },
-      { id: 'proj-2', name: 'Beta' },
-    ]);
+  it('returns current project from SDK web context (no REST call)', async () => {
     const result = await fetchProjectsDirect('', '');
-    expect(result).toEqual([{ id: 'proj-1', name: 'Alpha' }, { id: 'proj-2', name: 'Beta' }]);
+    expect(result).toEqual([{ id: 'proj-1', name: 'Alpha' }]);
+    expect(coreStub.getProjects).not.toHaveBeenCalled();
   });
 
   it('returns empty on aborted signal', async () => {
@@ -213,19 +216,112 @@ describe('fetchQueryRootIdsDirect', () => {
       workItemRelations: [],
     });
     const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
-    expect(result).toEqual([10, 20]);
+    expect(result.rootIds).toEqual([10, 20]);
+    expect(result.queryRelations).toEqual([]);
+  });
+
+  it('flat query: matchedIds equals rootIds directly, no getQuery call', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 1, // QueryType.Flat = 1
+      workItems: [{ id: 10 }, { id: 20 }],
+    });
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+    expect(result.matchedIds).toEqual([10, 20]);
+    expect(witStub.getQuery).not.toHaveBeenCalled();
+  });
+
+  it('tree query: fetches query definition and unions sourceClauses/targetClauses matches', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 2, // QueryType.Tree = 2
+      workItemRelations: [
+        { source: { id: 1 }, target: { id: 2 } },
+        { source: { id: 1 }, target: { id: 3 } },
+      ],
+    });
+    witStub.getQuery.mockResolvedValue({
+      queryType: 2,
+      sourceClauses: {
+        clauses: [], field: { name: 'Work Item Type', referenceName: 'System.WorkItemType' },
+        fieldValue: null, isFieldValue: false, logicalOperator: 1 /* AND */,
+        operator: { name: 'Equals', referenceName: 'SupportedOperations.Equals' }, value: 'Task',
+      },
+      targetClauses: {
+        clauses: [], field: { name: 'State', referenceName: 'System.State' },
+        fieldValue: null, isFieldValue: false, logicalOperator: 1,
+        operator: { name: 'Equals', referenceName: 'SupportedOperations.Equals' }, value: 'Active',
+      },
+    });
+    witStub.queryByWiql
+      .mockResolvedValueOnce({ workItems: [{ id: 1 }] }) // sourceClauses bucket
+      .mockResolvedValueOnce({ workItems: [{ id: 2 }] }); // targetClauses bucket
+
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+
+    expect(result.matchedIds?.sort()).toEqual([1, 2]);
+    expect(witStub.getQuery).toHaveBeenCalledWith('Proj', 'query-guid', 3 /* QueryExpand.All */);
+  });
+
+  it('tree query: matchedIds is null when getQuery fails', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 2,
+      workItemRelations: [{ source: { id: 1 }, target: { id: 2 } }],
+    });
+    witStub.getQuery.mockRejectedValue(new Error('definition fetch failed'));
+
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+
+    expect(result.matchedIds).toBeNull();
+  });
+
+  it('tree query: matchedIds is null when the query mode is DoesNotContain', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 2,
+      workItemRelations: [{ source: { id: 1 }, target: { id: 2 } }],
+    });
+    witStub.getQuery.mockResolvedValue({
+      queryType: 2,
+      filterOptions: 6, // LinkQueryMode.LinksRecursiveDoesNotContain
+      sourceClauses: {
+        clauses: [], field: { name: 'Work Item Type', referenceName: 'System.WorkItemType' },
+        fieldValue: null, isFieldValue: false, logicalOperator: 1,
+        operator: { name: 'Equals', referenceName: 'SupportedOperations.Equals' }, value: 'Task',
+      },
+    });
+
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+
+    expect(result.matchedIds).toBeNull();
+    expect(witStub.queryByWiql).not.toHaveBeenCalled();
   });
 
   it('extracts tree query root IDs (source not in target set)', async () => {
     witStub.queryById.mockResolvedValue({
-      queryType: 'tree',
+      queryType: 2, // QueryType.Tree = 2
       workItemRelations: [
         { source: { id: 1 }, target: { id: 2 } },
         { source: { id: 2 }, target: { id: 3 } },
       ],
     });
     const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
-    expect(result).toEqual([1]); // 2 is a child; only 1 is a root
+    expect(result.rootIds).toEqual([1]); // 2 is a child; only 1 is a root
+    expect(result.queryRelations).toHaveLength(2);
+    expect(result.queryRelations[0]).toMatchObject({ origin: 'query' });
+  });
+
+  it('extracts oneHop ("Direct Links") root IDs via null-source markers', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 3, // QueryType.OneHop = 3
+      workItemRelations: [
+        { source: null, target: { id: 1 } },
+        { rel: 'System.LinkTypes.Related', source: { id: 1 }, target: { id: 2 } },
+        { source: null, target: { id: 3 } },
+      ],
+    });
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+    expect(result.rootIds).toEqual([1, 3]);
+    expect(result.queryRelations).toEqual([
+      { rel: 'System.LinkTypes.Related', source: { id: 1 }, target: { id: 2 }, origin: 'query' },
+    ]);
   });
 });
 
@@ -276,5 +372,68 @@ describe('fetchHierarchyDirect', () => {
     await fetchHierarchyDirect(config, '', '');
     const batchCall = witStub.getWorkItemsBatch.mock.calls[0]?.[0] as { fields: string[] } | undefined;
     expect(batchCall?.fields).toContain('Microsoft.VSTS.Scheduling.CompletedWork');
+  });
+
+  it('merges query-native edges with link edges, query wins on the same pair', async () => {
+    // Tree query: 1 -> 2 (native structure)
+    witStub.queryById.mockResolvedValue({
+      queryType: 2, // QueryType.Tree = 2
+      workItemRelations: [{ source: { id: 1 }, target: { id: 2 } }],
+    });
+    // Link-type fetch discovers the SAME pair 1->2 (should be overridden by query origin), plus a new pair 2->3
+    witStub.queryByWiql.mockResolvedValue({
+      workItemRelations: [
+        { rel: 'X', source: { id: 1 }, target: { id: 2 } },
+        { rel: 'X', source: { id: 2 }, target: { id: 3 } },
+      ],
+    });
+    witStub.getWorkItemsBatch.mockResolvedValue([
+      { id: 1, fields: { 'System.WorkItemType': 'Epic', 'System.Title': 'E', 'System.State': 'Active', 'System.TeamProject': 'Proj' } },
+      { id: 2, fields: { 'System.WorkItemType': 'Feature', 'System.Title': 'F', 'System.State': 'Active', 'System.TeamProject': 'Proj' } },
+      { id: 3, fields: { 'System.WorkItemType': 'Task', 'System.Title': 'T', 'System.State': 'Active', 'System.TeamProject': 'Proj' } },
+    ]);
+
+    const config = {
+      teamProject: 'Proj', relationTypes: ['X'], queryId: 'q-guid',
+      effortField: '', closedState: 'Closed', topLevelType: '',
+    };
+    const result = await fetchHierarchyDirect(config, '', '');
+
+    const pair12 = result.workItemRelations.find(r => r.source?.id === 1 && r.target?.id === 2);
+    const pair23 = result.workItemRelations.find(r => r.source?.id === 2 && r.target?.id === 3);
+    expect(pair12?.origin).toBe('query');
+    expect(pair23?.origin).toBe('link');
+    expect(result.workItems.map(w => w.id).sort()).toEqual([1, 2, 3]);
+  });
+
+  it('follows links across projects when a discovered work item belongs to a different project', async () => {
+    // Hop 1: 'Proj' has a link from item 1 (Proj) to item 2 (OtherProj)
+    witStub.queryByWiql
+      .mockResolvedValueOnce({
+        workItemRelations: [{ rel: 'X', source: { id: 1 }, target: { id: 2 } }],
+      })
+      // Hop 2: OtherProj's own outgoing link, from item 2 to item 3 (also OtherProj)
+      .mockResolvedValueOnce({
+        workItemRelations: [{ rel: 'X', source: { id: 2 }, target: { id: 3 } }],
+      });
+
+    witStub.getWorkItemsBatch
+      .mockResolvedValueOnce([
+        { id: 1, fields: { 'System.WorkItemType': 'Epic', 'System.Title': 'E', 'System.State': 'Active', 'System.TeamProject': 'Proj' } },
+        { id: 2, fields: { 'System.WorkItemType': 'Feature', 'System.Title': 'F', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
+      ])
+      .mockResolvedValueOnce([
+        { id: 3, fields: { 'System.WorkItemType': 'Task', 'System.Title': 'T', 'System.State': 'Active', 'System.TeamProject': 'OtherProj' } },
+      ]);
+
+    const config = {
+      teamProject: 'Proj', relationTypes: ['X'], queryId: '',
+      effortField: '', closedState: 'Closed', topLevelType: '',
+    };
+    const result = await fetchHierarchyDirect(config, '', '');
+
+    expect(witStub.queryByWiql).toHaveBeenCalledTimes(2);
+    expect(result.workItems.map(w => w.id).sort()).toEqual([1, 2, 3]);
+    expect(result.workItemRelations).toHaveLength(2);
   });
 });

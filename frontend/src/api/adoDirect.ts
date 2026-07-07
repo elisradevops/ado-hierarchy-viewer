@@ -9,14 +9,18 @@
  */
 
 import { getClient } from 'azure-devops-extension-api';
-import { CoreRestClient } from 'azure-devops-extension-api/Core';
 import {
   WorkItemTrackingRestClient,
   QueryExpand,
   QueryType,
+  LinkQueryMode,
+  LogicalOperation,
   WorkItemErrorPolicy,
   WorkItemBatchGetRequest,
+  type WorkItemQueryClause,
 } from 'azure-devops-extension-api/WorkItemTracking';
+
+import * as SDK from 'azure-devops-extension-sdk';
 
 import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode } from '../types';
 import type { HierarchyConfig } from '../types';
@@ -56,6 +60,8 @@ export async function fetchRelationTypesDirect(
 
 // ─── Projects ──────────────────────────────────────────────────────────────
 
+// Uses SDK.getWebContext() instead of CoreRestClient.getProjects() — avoids
+// api-version=7.2 calls that fail on ADO Server 2022 (max 7.1).
 export async function fetchProjectsDirect(
   _orgUrl: string,
   _credential: string,
@@ -63,9 +69,11 @@ export async function fetchProjectsDirect(
 ): Promise<Array<{ id: string; name: string }>> {
   if (signal?.aborted) return [];
   try {
-    const client = getClient(CoreRestClient);
-    const projects = await client.getProjects();
-    return (projects ?? []).map(p => ({ id: p.id ?? '', name: p.name ?? '' }));
+    const ctx = SDK.getWebContext();
+    if (ctx?.project?.id && ctx.project.name) {
+      return [{ id: ctx.project.id, name: ctx.project.name }];
+    }
+    return [];
   } catch (err) {
     return handleAdoError(err);
   }
@@ -217,7 +225,159 @@ async function fetchWorkItemsBatchDirect(
   return allItems;
 }
 
+// ─── Query match derivation (extension-mode mirror of bff/queryMatchDerivation.ts) ──
+//
+// ADO tree/oneHop queries can pull in ancestor/sibling scaffolding beyond the actual
+// filter matches. There's no per-item "this is a real match" flag in the WIQL execution
+// response, so matches are independently re-derived by rendering the query's own filter
+// clauses (sourceClauses/targetClauses) as standalone flat WIQL and executing them.
+// Fail-closed: any clause bucket we can't safely render/execute returns null for that
+// bucket rather than guessing. See bff/src/services/queryMatchDerivation.ts for the
+// server-side twin of this logic (duplicated here per this file's existing BFF-mirroring
+// convention, e.g. fetchRelationsDirect mirroring fetchLinks).
+
+// Maps ADO's structured-clause operator reference names (e.g. "SupportedOperations.Equals")
+// to their literal WIQL syntax token. Empirically confirmed against a real ADO Server
+// response: operators come back as these semantic reference names, NOT literal symbols.
+// Anything not in this map bails (fail-closed) — a wrong mapping would only ever produce
+// invalid WIQL (caught as a request error → null), never a silently-wrong match set.
+const OPERATOR_TO_WIQL: Record<string, string> = {
+  'SupportedOperations.Equals': '=',
+  'SupportedOperations.NotEquals': '<>',
+  'SupportedOperations.GreaterThan': '>',
+  'SupportedOperations.LessThan': '<',
+  'SupportedOperations.GreaterThanEquals': '>=',
+  'SupportedOperations.LessThanEquals': '<=',
+  'SupportedOperations.Contains': 'Contains',
+  'SupportedOperations.ContainsWords': 'Contains Words',
+  'SupportedOperations.DoesNotContain': 'Does Not Contain',
+  'SupportedOperations.DoesNotContainWords': 'Does Not Contain Words',
+  'SupportedOperations.Under': 'Under',
+  'SupportedOperations.NotUnder': 'Not Under',
+  'SupportedOperations.In': 'In',
+  'SupportedOperations.NotIn': 'Not In',
+  'SupportedOperations.InGroup': 'In Group',
+  'SupportedOperations.NotInGroup': 'Not In Group',
+  'SupportedOperations.WasEver': 'Was Ever',
+};
+
+// Operators whose value is a comma-separated list needing per-item quoting/wrapping,
+// rather than a single literal.
+const LIST_OPERATORS = new Set(['In', 'Not In', 'In Group', 'Not In Group']);
+
+function escapeWiqlLiteral(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function isUnresolvableMacro(value: string): boolean {
+  return /^@currentiterations?\b/i.test(value.trim());
+}
+
+function renderClauseTreeDirect(clause: WorkItemQueryClause | null | undefined): string | null {
+  if (!clause) return null;
+
+  if (clause.clauses && clause.clauses.length > 0) {
+    const rendered: string[] = [];
+    for (let i = 0; i < clause.clauses.length; i++) {
+      const child = clause.clauses[i];
+      const piece = renderClauseTreeDirect(child);
+      if (piece === null) return null;
+
+      if (i === 0) {
+        rendered.push(piece);
+      } else {
+        const op = child.logicalOperator === LogicalOperation.OR ? 'OR' : 'AND';
+        rendered.push(`${op} ${piece}`);
+      }
+    }
+    return `(${rendered.join(' ')})`;
+  }
+
+  const field = clause.field?.referenceName;
+  const operatorRef = clause.operator?.referenceName;
+  if (!field || !operatorRef) return null;
+  const wiqlOp = OPERATOR_TO_WIQL[operatorRef];
+  if (!wiqlOp) return null;
+
+  if (clause.isFieldValue) {
+    const fieldValueRef = clause.fieldValue?.referenceName;
+    if (!fieldValueRef) return null;
+    return `[${field}] ${wiqlOp} [${fieldValueRef}]`;
+  }
+
+  const rawValue = clause.value ?? '';
+  if (isUnresolvableMacro(rawValue)) return null;
+
+  if (LIST_OPERATORS.has(wiqlOp)) {
+    const items = rawValue.split(',').map(v => v.trim()).filter(Boolean);
+    if (items.length === 0) return null;
+    const rendered = items.map(v => `'${escapeWiqlLiteral(v)}'`).join(',');
+    return `[${field}] ${wiqlOp} (${rendered})`;
+  }
+
+  const isMacro = rawValue.trim().startsWith('@');
+  const rendered = isMacro ? rawValue.trim() : `'${escapeWiqlLiteral(rawValue)}'`;
+  return `[${field}] ${wiqlOp} ${rendered}`;
+}
+
+async function executeClauseBucketAsFlatQueryDirect(
+  project: string,
+  clauseTree: WorkItemQueryClause | null | undefined,
+  signal?: AbortSignal
+): Promise<number[] | null> {
+  if (!clauseTree || signal?.aborted) return null;
+
+  const rendered = renderClauseTreeDirect(clauseTree);
+  if (rendered === null) return null;
+
+  try {
+    const client = getClient(WorkItemTrackingRestClient);
+    const result = await client.queryByWiql(
+      { query: `SELECT [System.Id] FROM WorkItems WHERE ${rendered}` },
+      project
+    );
+    return (result.workItems ?? []).map(wi => wi.id).filter(Number.isInteger);
+  } catch {
+    return null;
+  }
+}
+
+async function deriveMatchedIdsDirect(
+  project: string,
+  queryDef: import('azure-devops-extension-api/WorkItemTracking').QueryHierarchyItem,
+  presentIds: ReadonlySet<number>,
+  signal?: AbortSignal
+): Promise<number[] | null> {
+  if (queryDef.isInvalidSyntax) return null;
+
+  // DoesNotContain modes invert match semantics — bail entirely rather than mislabel.
+  if (
+    queryDef.filterOptions === LinkQueryMode.LinksOneHopDoesNotContain ||
+    queryDef.filterOptions === LinkQueryMode.LinksRecursiveDoesNotContain
+  ) {
+    return null;
+  }
+
+  const [sourceIds, targetIds] = await Promise.all([
+    executeClauseBucketAsFlatQueryDirect(project, queryDef.sourceClauses, signal),
+    executeClauseBucketAsFlatQueryDirect(project, queryDef.targetClauses, signal),
+  ]);
+
+  if (sourceIds === null && targetIds === null) return null;
+
+  const union = new Set<number>([...(sourceIds ?? []), ...(targetIds ?? [])]);
+  return [...union].filter(id => presentIds.has(id));
+}
+
 // ─── Query root IDs fetch ──────────────────────────────────────────────────
+
+export interface QueryRootsResult {
+  rootIds: number[];
+  /** Native tree edges from the query itself (empty for flat queries) — origin: 'query' */
+  queryRelations: WorkItemRelation[];
+  /** True filter-match ids, independent of tree/oneHop scaffolding. Null when undeterminable. */
+  matchedIds: number[] | null;
+}
 
 export async function fetchQueryRootIdsDirect(
   _orgUrl: string,
@@ -225,29 +385,61 @@ export async function fetchQueryRootIdsDirect(
   project: string,
   queryId: string,
   signal?: AbortSignal
-): Promise<number[]> {
-  if (signal?.aborted) return [];
+): Promise<QueryRootsResult> {
+  if (signal?.aborted) return { rootIds: [], queryRelations: [], matchedIds: null };
   try {
     const client = getClient(WorkItemTrackingRestClient);
     const result = await client.queryById(queryId, project);
 
     let rootIds: number[] = [];
+    let queryRelations: WorkItemRelation[] = [];
     // N1: compare against QueryType enum — SDK returns numeric (QueryType.Flat = 1)
     if (result.queryType === QueryType.Flat && Array.isArray(result.workItems)) {
       rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
-    } else if (Array.isArray(result.workItemRelations)) {
-      const childIds = new Set(
-        result.workItemRelations
-          .filter(r => r.target && Number.isInteger(r.target.id))
-          .map(r => r.target!.id)
-      );
+    } else if (result.queryType === QueryType.Tree && Array.isArray(result.workItemRelations)) {
+      queryRelations = result.workItemRelations
+        .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+        .map(r => ({ rel: r.rel ?? null, source: { id: r.source!.id }, target: { id: r.target!.id }, origin: 'query' as const }));
+      const childIds = new Set(queryRelations.map(r => r.target!.id));
       const seen = new Set<number>();
-      rootIds = result.workItemRelations
-        .filter(r => r.source && Number.isInteger(r.source.id) && !childIds.has(r.source.id))
+      rootIds = queryRelations
+        .filter(r => !childIds.has(r.source!.id))
         .map(r => r.source!.id)
         .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
+    } else if (result.queryType === QueryType.OneHop && Array.isArray(result.workItemRelations)) {
+      // "Direct Links" queries: top-level items are marked by a null-source entry
+      // { source: null, target: {id} }; actual one-hop links have both source and target.
+      const seen = new Set<number>();
+      for (const r of result.workItemRelations) {
+        if (!r.source && r.target && Number.isInteger(r.target.id) && !seen.has(r.target.id)) {
+          seen.add(r.target.id);
+          rootIds.push(r.target.id);
+        }
+      }
+      queryRelations = result.workItemRelations
+        .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+        .map(r => ({ rel: r.rel ?? null, source: { id: r.source!.id }, target: { id: r.target!.id }, origin: 'query' as const }));
     }
-    return rootIds;
+
+    let matchedIds: number[] | null;
+    if (result.queryType === QueryType.Flat) {
+      // Flat queries return no scaffolding — every returned id is already an exact match.
+      matchedIds = rootIds;
+    } else {
+      const presentIds = new Set<number>(rootIds);
+      for (const r of queryRelations) {
+        presentIds.add(r.source!.id);
+        presentIds.add(r.target!.id);
+      }
+      try {
+        const queryDef = await client.getQuery(project, queryId, QueryExpand.All);
+        matchedIds = await deriveMatchedIdsDirect(project, queryDef, presentIds, signal);
+      } catch {
+        matchedIds = null;
+      }
+    }
+
+    return { rootIds, queryRelations, matchedIds };
   } catch (err) {
     return handleAdoError(err);
   }
@@ -291,26 +483,84 @@ export async function fetchQueriesDirect(
 
 // ─── Composite hierarchy fetch ─────────────────────────────────────────────
 
+// Bounds the cross-project link-following BFS so a pathological/cyclic collection can't hang the UI.
+const MAX_PROJECT_HOPS = 15;
+
 export async function fetchHierarchyDirect(
   config: HierarchyConfig,
   _orgUrl: string,
   _credential: string,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[] }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null }> {
   let rootIds: number[] | undefined;
+  let queryRelations: WorkItemRelation[] = [];
+  let matchedIds: number[] | null = null;
   if (config.queryId) {
-    rootIds = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
+    const q = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
+    rootIds = q.rootIds;
+    queryRelations = q.queryRelations;
+    matchedIds = q.matchedIds;
   }
 
   // N4: abort checks between sequential awaits to skip unnecessary batch fetches after cancel
-  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds };
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null };
+
+  const effortField = config.effortField ?? DEFAULT_EFFORT_FIELD;
+  const baseFields = buildWiFields(effortField);
+  const completedWork = 'Microsoft.VSTS.Scheduling.CompletedWork';
+  const fields = baseFields.includes(completedWork) ? baseFields : [...baseFields, completedWork];
+
+  // Cross-project recursive link-follow: start from config.teamProject, and whenever a
+  // newly resolved work item belongs to a project we haven't queried yet, fetch that
+  // project's own links too. Bounded by MAX_PROJECT_HOPS + shrinking frontier.
+  const linkRelationsByPair = new Map<string, WorkItemRelation>();
+  const resolvedItemsById = new Map<number, WorkItem>();
+  const knownProjects = new Set<string>([config.teamProject]);
 
   // Gap #3: skip WIQL when no relation types to avoid empty IN () → ADO 400
-  const relations = config.relationTypes.length > 0
-    ? await fetchRelationsDirect('', '', config.teamProject, config.relationTypes, signal)
-    : [];
+  if (config.relationTypes.length > 0) {
+    let frontier = [config.teamProject];
+    for (let hop = 0; hop < MAX_PROJECT_HOPS && frontier.length > 0 && !signal?.aborted; hop++) {
+      const batches = await Promise.all(
+        frontier.map(p => fetchRelationsDirect('', '', p, config.relationTypes, signal))
+      );
 
-  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds };
+      const idsToResolve = new Set<number>();
+      for (const rels of batches) {
+        for (const r of rels) {
+          if (!r.source || !r.target) continue;
+          const pairKey = `${r.source.id}-${r.target.id}`;
+          if (!linkRelationsByPair.has(pairKey)) {
+            linkRelationsByPair.set(pairKey, { ...r, origin: 'link' });
+          }
+          if (!resolvedItemsById.has(r.source.id)) idsToResolve.add(r.source.id);
+          if (!resolvedItemsById.has(r.target.id)) idsToResolve.add(r.target.id);
+        }
+      }
+
+      if (idsToResolve.size === 0 || signal?.aborted) break;
+
+      const newItems = await fetchWorkItemsBatchDirect(config.teamProject, [...idsToResolve], fields, effortField, signal);
+      const discoveredProjects = new Set<string>();
+      for (const item of newItems) {
+        resolvedItemsById.set(item.id, item);
+        if (item.teamProject && !knownProjects.has(item.teamProject)) {
+          knownProjects.add(item.teamProject);
+          discoveredProjects.add(item.teamProject);
+        }
+      }
+      frontier = [...discoveredProjects];
+    }
+  }
+
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null };
+
+  // Merge query-native edges with link-discovered edges — the query wins when both
+  // describe the same source→target pair (it's the "actual query result").
+  const mergedByPair = new Map<string, WorkItemRelation>();
+  for (const r of linkRelationsByPair.values()) mergedByPair.set(`${r.source!.id}-${r.target!.id}`, r);
+  for (const r of queryRelations) mergedByPair.set(`${r.source!.id}-${r.target!.id}`, r);
+  const relations = [...mergedByPair.values()];
 
   const idSet = new Set<number>();
   for (const r of relations) {
@@ -321,20 +571,11 @@ export async function fetchHierarchyDirect(
     for (const id of rootIds) idSet.add(id);
   }
 
-  // Gap #4: DEFAULT_EFFORT_FIELD fallback when effortField not configured
-  const effortField = config.effortField ?? DEFAULT_EFFORT_FIELD;
-  // Gap #5: include CompletedWork (missing from original adoDirect)
-  const baseFields = buildWiFields(effortField);
-  const completedWork = 'Microsoft.VSTS.Scheduling.CompletedWork';
-  const fields = baseFields.includes(completedWork) ? baseFields : [...baseFields, completedWork];
+  const missingIds = [...idSet].filter(id => !resolvedItemsById.has(id));
+  const missingItems = missingIds.length > 0
+    ? await fetchWorkItemsBatchDirect(config.teamProject, missingIds, fields, effortField, signal)
+    : [];
+  const workItems = [...resolvedItemsById.values(), ...missingItems];
 
-  const workItems = await fetchWorkItemsBatchDirect(
-    config.teamProject,
-    [...idSet],
-    fields,
-    effortField,
-    signal
-  );
-
-  return { workItemRelations: relations, workItems, rootIds };
+  return { workItemRelations: relations, workItems, rootIds, matchedIds };
 }

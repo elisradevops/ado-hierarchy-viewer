@@ -101,7 +101,7 @@ export const HierarchySummary = React.memo(function HierarchySummary({
   onFilterByType,
   onFilterByState,
 }: HierarchySummaryProps): React.ReactElement {
-  const { totalItems, overallProgressPct, totalEffort, byType, byState } = stats;
+  const { totalItems, overallProgressPct, totalEffort, completedLeaves, totalLeaves, byType, byState } = stats;
   const apiTypeColors = useWorkItemMetaStore(s => s.typeColors);
   const apiStateColors = useWorkItemMetaStore(s => s.stateColors);
   const progressPct = Number.isFinite(overallProgressPct) ? overallProgressPct : 0;
@@ -145,7 +145,7 @@ export const HierarchySummary = React.memo(function HierarchySummary({
           {/* Dynamic — computed value exception */}
           <Box sx={{ position: 'absolute', top: 0, left: 0, height: '100%', width: `${clamped}%`, bgcolor: getProgressColor(clamped), borderRadius: 3 }} />
         </Box>
-        <Typography sx={STAT_VALUE_SX}>{progressPct.toFixed(0)}%</Typography>
+        <Typography sx={STAT_VALUE_SX}>{completedLeaves}/{totalLeaves} · {progressPct.toFixed(0)}%</Typography>
       </Box>
 
       {/* Types */}

@@ -196,4 +196,26 @@ describe('buildTree', () => {
       expect(node).toBeNull();
     });
   });
+
+  describe('isQueryMatch stamping', () => {
+    it('stamps isQueryMatch true for ids present in matchedIds', () => {
+      const adjacency = makeAdjacency([[1, [2]], [2, [3]]]);
+      const itemsById = makeItemsById(LINEAR_ITEMS);
+      const matchedIds = new Set([1, 3]);
+      const node = buildTree(1, adjacency, itemsById, 'Closed', new Set(), matchedIds);
+
+      expect(node!.isQueryMatch).toBe(true);
+      expect(node!.children[0].isQueryMatch).toBe(false); // id 2 not in matchedIds
+      expect(node!.children[0].children[0].isQueryMatch).toBe(true);
+    });
+
+    it('leaves isQueryMatch undefined when matchedIds is not provided', () => {
+      const adjacency = makeAdjacency([[1, [2]]]);
+      const itemsById = makeItemsById(LINEAR_ITEMS);
+      const node = buildTree(1, adjacency, itemsById, 'Closed');
+
+      expect(node!.isQueryMatch).toBeUndefined();
+      expect(node!.children[0].isQueryMatch).toBeUndefined();
+    });
+  });
 });

@@ -19,6 +19,7 @@ import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
 import CheckBoxIcon from '@mui/icons-material/CheckBox';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { COLUMN_DEFS } from '../constants/columns';
@@ -88,8 +89,11 @@ export function HierarchyToolbar({
   onExpandAll,
   onCollapseAll,
 }: HierarchyToolbarProps): React.ReactElement {
-  const { filter, setFilter, autoRefreshMs, setAutoRefreshMs, density, setDensity, hiddenCols, toggleCol, resetCols } = useUiPrefsStore();
+  const { filter, setFilter, autoRefreshMs, setAutoRefreshMs, density, setDensity, hiddenCols, toggleCol, resetCols, showOnlyMatches, toggleShowOnlyMatches } = useUiPrefsStore();
   const rowsById = useHierarchyStore(s => s.rowsById);
+  const usedQueryId = useHierarchyStore(s => s.usedQueryId);
+  const matchedIds = useHierarchyStore(s => s.matchedIds);
+  const matchesUnavailable = !usedQueryId || matchedIds === null;
   const facets = useMemo(() => getFacetValues(rowsById), [rowsById]);
   const [localText, setLocalText] = useState(filter.text);
   const debouncedText = useDebouncedValue(localText);
@@ -246,6 +250,17 @@ export function HierarchyToolbar({
       </Menu>
 
       <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
+
+      {!matchesUnavailable && (
+        <>
+          <Tooltip title={showOnlyMatches ? 'Showing only query matches — click to show full tree' : 'Show only query matches (dims ADO-added ancestor/sibling scaffolding)'}>
+            <IconButton size="small" onClick={toggleShowOnlyMatches}>
+              <FilterAltIcon fontSize="small" sx={{ color: showOnlyMatches ? 'primary.main' : 'text.disabled' }} />
+            </IconButton>
+          </Tooltip>
+          <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
+        </>
+      )}
 
       {/* Segment 5: Export + density */}
       <Tooltip title="Export CSV">

@@ -4,6 +4,7 @@ import { cacheKey, cacheKeyFromParts } from '../utils/hash';
 import { adoConcurrencyLimit } from '../utils/queue';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { deriveMatchedIds, type QueryDefinition } from './queryMatchDerivation';
 
 // ADO on-prem api-version fallback chain
 const API_VERSIONS = ['7.1', '5.1', ''] as const;
@@ -32,6 +33,8 @@ export interface WorkItemRelation {
   rel: string | null;
   source: { id: number } | null;
   target: { id: number } | null;
+  /** 'query' = came from the saved query's own tree structure; 'link' = discovered via selected link types */
+  origin?: 'query' | 'link';
 }
 
 export interface WorkItem {
@@ -53,14 +56,53 @@ export interface WorkItem {
   url?: string;
 }
 
+export interface QueryRootsResult {
+  rootIds: number[];
+  /** Native tree edges from the query itself (empty for flat queries) — origin: 'query' */
+  queryRelations: WorkItemRelation[];
+  /**
+   * True filter-match ids, independent of tree/oneHop ancestor-and-sibling scaffolding
+   * ADO includes in the displayed hierarchy. Null when undeterminable (see
+   * queryMatchDerivation.ts) — strict-mode highlighting is simply unavailable then.
+   */
+  matchedIds: number[] | null;
+}
+
+async function fetchQueryDefinition(
+  client: AdoClient,
+  orgUrl: string,
+  project: string,
+  queryId: string
+): Promise<QueryDefinition | null> {
+  const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
+  const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/queries/${encodeURIComponent(queryId)}?$expand=all`;
+  try {
+    const def = await withApiVersionFallback(async (apiVersion) => {
+      return client.get<QueryDefinition>(url, apiVersion || undefined);
+    });
+    logger.debug('fetchQueryDefinition result', {
+      queryType: def.queryType,
+      isInvalidSyntax: def.isInvalidSyntax,
+      filterOptions: def.filterOptions,
+      sourceClauses: JSON.stringify(def.sourceClauses),
+      targetClauses: JSON.stringify(def.targetClauses),
+      wiql: def.wiql,
+    });
+    return def;
+  } catch (err) {
+    logger.debug('fetchQueryDefinition failed — strict mode unavailable for this query', { err });
+    return null;
+  }
+}
+
 export async function fetchQueryRootIds(
   client: AdoClient,
   orgUrl: string,
   project: string,
   queryId: string
-): Promise<number[]> {
+): Promise<QueryRootsResult> {
   const key = cacheKey(orgUrl, project, 'query', queryId);
-  const cached = cacheGet<number[]>(key);
+  const cached = cacheGet<QueryRootsResult>(key);
   if (cached) return cached;
 
   const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
@@ -70,28 +112,58 @@ export async function fetchQueryRootIds(
     return client.get<{
       queryType: string;
       workItems?: Array<{ id: number }>;
-      workItemRelations?: Array<{ source: { id: number } | null; target: { id: number } | null }>;
+      workItemRelations?: Array<{ rel?: string | null; source: { id: number } | null; target: { id: number } | null }>;
     }>(url, apiVersion || undefined);
   });
 
   let rootIds: number[] = [];
-  if (result.queryType === 'flat' && Array.isArray(result.workItems)) {
+  let queryRelations: WorkItemRelation[] = [];
+  const queryType = (result.queryType ?? '').toLowerCase();
+
+  if (queryType === 'flat' && Array.isArray(result.workItems)) {
     rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
-  } else if (result.queryType === 'tree' && Array.isArray(result.workItemRelations)) {
-    const childIds = new Set(
-      result.workItemRelations
-        .filter(r => r.target && Number.isInteger(r.target.id))
-        .map(r => r.target!.id)
-    );
+  } else if (queryType === 'tree' && Array.isArray(result.workItemRelations)) {
+    queryRelations = result.workItemRelations
+      .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+      .map(r => ({ rel: r.rel ?? null, source: r.source, target: r.target, origin: 'query' as const }));
+    const childIds = new Set(queryRelations.map(r => r.target!.id));
     const seen = new Set<number>();
-    rootIds = result.workItemRelations
-      .filter(r => r.source && Number.isInteger(r.source.id) && !childIds.has(r.source.id))
+    rootIds = queryRelations
+      .filter(r => !childIds.has(r.source!.id))
       .map(r => r.source!.id)
       .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
+  } else if (queryType === 'onehop' && Array.isArray(result.workItemRelations)) {
+    // "Direct Links" queries: top-level items are marked by a null-source entry
+    // { source: null, target: {id} }; actual one-hop links have both source and target.
+    const seen = new Set<number>();
+    for (const r of result.workItemRelations) {
+      if (!r.source && r.target && Number.isInteger(r.target.id) && !seen.has(r.target.id)) {
+        seen.add(r.target.id);
+        rootIds.push(r.target.id);
+      }
+    }
+    queryRelations = result.workItemRelations
+      .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+      .map(r => ({ rel: r.rel ?? null, source: r.source, target: r.target, origin: 'query' as const }));
   }
 
-  cacheSet(key, rootIds);
-  return rootIds;
+  let matchedIds: number[] | null;
+  if (queryType === 'flat') {
+    // Flat queries return no scaffolding — every returned id is already an exact match.
+    matchedIds = rootIds;
+  } else {
+    const presentIds = new Set<number>(rootIds);
+    for (const r of queryRelations) {
+      presentIds.add(r.source!.id);
+      presentIds.add(r.target!.id);
+    }
+    const queryDef = await fetchQueryDefinition(client, orgUrl, project, queryId);
+    matchedIds = queryDef ? await deriveMatchedIds(client, orgUrl, project, queryDef, presentIds) : null;
+  }
+
+  const out: QueryRootsResult = { rootIds, queryRelations, matchedIds };
+  cacheSet(key, out);
+  return out;
 }
 
 export async function fetchLinks(

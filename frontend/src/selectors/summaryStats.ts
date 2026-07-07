@@ -1,14 +1,16 @@
 export interface SummaryStats {
   totalItems: number;
-  overallProgressPct: number; // effort-weighted average of root progressPct; falls back to simple avg if totalEffort is 0
+  overallProgressPct: number; // global closed-leaf / total-leaf ratio across all roots
   totalEffort: number;        // sum of root effortTotal (avoids double-counting children)
+  completedLeaves: number;    // sum of root closedLeaves
+  totalLeaves: number;        // sum of root totalLeaves
   byType: Record<string, number>;  // { Epic: 3, Feature: 12, ... }
   byState: Record<string, number>; // { Active: 5, Closed: 7, ... }
 }
 
 export function computeSummaryStats(
   rootIds: number[],
-  rowsById: Record<number, { type: string; state: string; effortTotal: number; progressPct: number }>
+  rowsById: Record<number, { type: string; state: string; effortTotal: number; progressPct: number; closedLeaves: number; totalLeaves: number }>
 ): SummaryStats {
   const totalItems = Object.keys(rowsById).length;
 
@@ -20,25 +22,20 @@ export function computeSummaryStats(
   }
 
   let totalEffort = 0;
-  let weightedSum = 0;
-  let simpleSum = 0;
-  let validRootCount = 0;
+  let completedLeaves = 0;
+  let totalLeaves = 0;
 
   for (const id of rootIds) {
     const root = rowsById[id];
     if (!root) continue;
-    validRootCount++;
     totalEffort += root.effortTotal;
-    weightedSum += root.progressPct * root.effortTotal;
-    simpleSum += root.progressPct;
+    completedLeaves += root.closedLeaves;
+    totalLeaves += root.totalLeaves;
   }
 
-  let overallProgressPct = 0;
-  if (validRootCount > 0) {
-    overallProgressPct = totalEffort > 0
-      ? weightedSum / totalEffort
-      : simpleSum / validRootCount;
-  }
+  // Global leaf-count ratio — matches the same definition used by each row's own progressPct,
+  // so the summary total is consistent with what's shown per-row instead of an effort-weighted average.
+  const overallProgressPct = totalLeaves > 0 ? Math.round((completedLeaves / totalLeaves) * 100 * 100) / 100 : 0;
 
-  return { totalItems, overallProgressPct, totalEffort, byType, byState };
+  return { totalItems, overallProgressPct, totalEffort, completedLeaves, totalLeaves, byType, byState };
 }

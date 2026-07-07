@@ -320,7 +320,7 @@ describe('fetchWorkItems', () => {
 // ─── fetchQueryRootIds ─────────────────────────────────────────────────────────
 
 describe('fetchQueryRootIds', () => {
-  it('returns ids from a flat query', async () => {
+  it('returns ids from a flat query with no queryRelations', async () => {
     const client = makeClient();
     (client.get as jest.Mock).mockResolvedValueOnce({
       queryType: 'flat',
@@ -329,7 +329,63 @@ describe('fetchQueryRootIds', () => {
 
     const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-1');
 
-    expect(result).toEqual([10, 20]);
+    expect(result.rootIds).toEqual([10, 20]);
+    expect(result.queryRelations).toEqual([]);
+  });
+
+  it('flat query: matchedIds equals rootIds directly (no query-definition fetch)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'flat',
+      workItems: [{ id: 10 }, { id: 20 }],
+    });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-flat-matched');
+
+    expect(result.matchedIds).toEqual([10, 20]);
+    expect(client.get).toHaveBeenCalledTimes(1); // no query-definition round trip for flat
+  });
+
+  it('tree query: fetches query definition and bundles derived matchedIds', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock)
+      .mockResolvedValueOnce({
+        queryType: 'tree',
+        workItemRelations: [
+          { source: { id: 1 }, target: { id: 2 } },
+          { source: { id: 1 }, target: { id: 3 } },
+        ],
+      })
+      .mockResolvedValueOnce({
+        queryType: 'tree',
+        sourceClauses: {
+          clauses: [], field: { name: 'Work Item Type', referenceName: 'System.WorkItemType' },
+          fieldValue: null, isFieldValue: false, logicalOperator: 'AND',
+          operator: { name: 'Equals', referenceName: 'SupportedOperations.Equals' }, value: 'Epic',
+        },
+      });
+    (client.post as jest.Mock).mockResolvedValueOnce({ workItems: [{ id: 1 }] });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-tree-matched');
+
+    expect(result.matchedIds).toEqual([1]);
+    const [defUrl] = (client.get as jest.Mock).mock.calls[1];
+    expect(defUrl).toContain('/Proj/_apis/wit/queries/query-id-tree-matched');
+    expect(defUrl).toContain('$expand=all');
+  });
+
+  it('tree query: matchedIds is null when the query definition fetch fails', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock)
+      .mockResolvedValueOnce({
+        queryType: 'tree',
+        workItemRelations: [{ source: { id: 1 }, target: { id: 2 } }],
+      })
+      .mockRejectedValue(new Error('definition fetch failed'));
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-def-fail');
+
+    expect(result.matchedIds).toBeNull();
   });
 
   it('returns top-level source ids from a tree query (sources not appearing as targets)', async () => {
@@ -345,7 +401,23 @@ describe('fetchQueryRootIds', () => {
     // id 2 is a target → not a root; id 1 is only a source → root
     const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-2');
 
-    expect(result).toEqual([1]);
+    expect(result.rootIds).toEqual([1]);
+  });
+
+  it('tags tree-query relations with origin: query', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'tree',
+      workItemRelations: [
+        { rel: 'System.LinkTypes.Hierarchy-Forward', source: { id: 1 }, target: { id: 2 } },
+      ],
+    });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-tag');
+
+    expect(result.queryRelations).toEqual([
+      { rel: 'System.LinkTypes.Hierarchy-Forward', source: { id: 1 }, target: { id: 2 }, origin: 'query' },
+    ]);
   });
 
   it('deduplicates root ids in tree query', async () => {
@@ -360,21 +432,52 @@ describe('fetchQueryRootIds', () => {
 
     const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-3');
 
-    expect(result).toEqual([1]);
+    expect(result.rootIds).toEqual([1]);
   });
 
-  it('returns empty array for unknown queryType', async () => {
+  it('returns empty array for a truly unknown queryType', async () => {
     const client = makeClient();
-    (client.get as jest.Mock).mockResolvedValueOnce({ queryType: 'oneHop' });
+    (client.get as jest.Mock).mockResolvedValueOnce({ queryType: 'somethingElse' });
 
     const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'query-id-4');
 
-    expect(result).toEqual([]);
+    expect(result.rootIds).toEqual([]);
+  });
+
+  it('extracts root ids from a oneHop ("Direct Links") query via null-source markers', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'oneHop',
+      workItemRelations: [
+        { source: null, target: { id: 1 } },
+        { rel: 'System.LinkTypes.Related', source: { id: 1 }, target: { id: 2 } },
+        { source: null, target: { id: 3 } },
+      ],
+    });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'onehop-query');
+
+    expect(result.rootIds).toEqual([1, 3]);
+    expect(result.queryRelations).toEqual([
+      { rel: 'System.LinkTypes.Related', source: { id: 1 }, target: { id: 2 }, origin: 'query' },
+    ]);
+  });
+
+  it('matches queryType case-insensitively (on-prem TFS casing)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValueOnce({
+      queryType: 'Flat',
+      workItems: [{ id: 7 }],
+    });
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'flat-cased');
+
+    expect(result.rootIds).toEqual([7]);
   });
 
   it('returns cached value without calling AdoClient.get', async () => {
     const client = makeClient();
-    const cached = [5, 6];
+    const cached = { rootIds: [5, 6], queryRelations: [] };
     mockedCacheGet.mockReturnValue(cached);
 
     const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'cached-query');

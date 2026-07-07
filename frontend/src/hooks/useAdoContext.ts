@@ -30,6 +30,8 @@ export function useAdoContext(): UseAdoContextResult {
           connectExtension(ctx.collectionUri, bearerToken);
           if (ctx.project) {
             setConfig({ teamProject: ctx.project });
+          } else {
+            setError('Could not determine the ADO project from context — try reloading the page.');
           }
         } else if (ctx.isAdo && !ctx.accessToken) {
           // ADO host detected but token acquisition failed — surface explicitly.

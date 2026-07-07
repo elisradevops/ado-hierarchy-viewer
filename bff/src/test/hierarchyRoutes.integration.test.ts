@@ -6,6 +6,7 @@ import * as HierarchyService from '../services/HierarchyService';
 jest.mock('../services/HierarchyService', () => ({
   fetchLinks: jest.fn().mockResolvedValue([]),
   fetchWorkItems: jest.fn().mockResolvedValue([]),
+  fetchQueryRootIds: jest.fn().mockResolvedValue({ rootIds: [], queryRelations: [], matchedIds: null }),
 }));
 
 // Mock AdoClient for metadata routes
@@ -20,6 +21,7 @@ jest.mock('../services/AdoClient', () => {
 
 const mockFetchLinks = HierarchyService.fetchLinks as jest.Mock;
 const mockFetchWorkItems = HierarchyService.fetchWorkItems as jest.Mock;
+const mockFetchQueryRootIds = HierarchyService.fetchQueryRootIds as jest.Mock;
 
 const ADO_HEADERS = {
   'x-ado-org-url': 'https://ado.example.com',
@@ -174,6 +176,22 @@ describe('BFF route integration', () => {
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('workItemRelations');
       expect(res.body).toHaveProperty('workItems');
+      expect(res.body).toHaveProperty('matchedIds', null); // no queryId → matchedIds stays null
+    });
+
+    it('returns matchedIds from fetchQueryRootIds when a queryId is supplied', async () => {
+      mockFetchQueryRootIds.mockResolvedValueOnce({
+        rootIds: [1], queryRelations: [], matchedIds: [1, 2, 3],
+      });
+
+      const res = await request(app)
+        .post('/api/hierarchy')
+        .set(ADO_HEADERS)
+        .send({ project: 'MyProject', relationTypes: [], queryId: 'q-1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.matchedIds).toEqual([1, 2, 3]);
+      expect(res.body.rootIds).toEqual([1]);
     });
 
     it('returns 422 on invalid body', async () => {

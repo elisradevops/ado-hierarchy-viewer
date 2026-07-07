@@ -134,12 +134,13 @@ export async function fetchHierarchy(
   config: HierarchyConfig,
   ctx: AuthCtx,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[] }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null }> {
   const response = await withRetry(() =>
     httpClient.post<{
       workItemRelations: WorkItemRelation[];
       workItems: WorkItem[];
       rootIds?: number[];
+      matchedIds: number[] | null;
     }>(
       '/hierarchy',
       {
@@ -157,5 +158,5 @@ export async function fetchHierarchy(
     MAX_RETRIES,
     signal
   );
-  return response.data ?? { workItemRelations: [], workItems: [] };
+  return response.data ?? { workItemRelations: [], workItems: [], matchedIds: null };
 }

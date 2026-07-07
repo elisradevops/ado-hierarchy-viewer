@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { computeSummaryStats } from '../../selectors/summaryStats';
 
-const makeRow = (type: string, state: string, effortTotal: number, progressPct: number) => ({
+const makeRow = (type: string, state: string, effortTotal: number, progressPct: number, closedLeaves: number, totalLeaves: number) => ({
   type,
   state,
   effortTotal,
   progressPct,
+  closedLeaves,
+  totalLeaves,
 });
 
 describe('computeSummaryStats', () => {
@@ -20,9 +22,9 @@ describe('computeSummaryStats', () => {
 
   it('counts all items in rowsById for totalItems', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 10, 50),
-      2: makeRow('Feature', 'Closed', 5, 100),
-      3: makeRow('Task', 'Active', 2, 0),
+      1: makeRow('Epic', 'Active', 10, 50, 1, 2),
+      2: makeRow('Feature', 'Closed', 5, 100, 1, 1),
+      3: makeRow('Task', 'Active', 2, 0, 0, 1),
     };
     const result = computeSummaryStats([1], rowsById);
     expect(result.totalItems).toBe(3);
@@ -30,41 +32,43 @@ describe('computeSummaryStats', () => {
 
   it('sums effortTotal of roots only for totalEffort', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 10, 50),
-      2: makeRow('Feature', 'Active', 5, 80),
+      1: makeRow('Epic', 'Active', 10, 50, 1, 2),
+      2: makeRow('Feature', 'Active', 5, 80, 4, 5),
     };
     // Only root 1 — child 2 not in rootIds
     const result = computeSummaryStats([1], rowsById);
     expect(result.totalEffort).toBe(10);
   });
 
-  it('computes effort-weighted progress when totalEffort > 0', () => {
+  it('computes a global closed-leaf / total-leaf ratio across roots', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 10, 0),
-      2: makeRow('Epic', 'Active', 10, 100),
+      1: makeRow('Epic', 'Active', 10, 0, 0, 2),
+      2: makeRow('Epic', 'Active', 10, 100, 2, 2),
     };
-    // weighted: (0*10 + 100*10) / 20 = 50
+    // global: (0 + 2) closed / (2 + 2) total = 50%
     const result = computeSummaryStats([1, 2], rowsById);
     expect(result.totalEffort).toBe(20);
+    expect(result.completedLeaves).toBe(2);
+    expect(result.totalLeaves).toBe(4);
     expect(result.overallProgressPct).toBe(50);
   });
 
-  it('falls back to simple average when totalEffort is 0', () => {
+  it('is unaffected by effort being zero (no fallback needed with leaf counts)', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 0, 20),
-      2: makeRow('Feature', 'Active', 0, 80),
+      1: makeRow('Epic', 'Active', 0, 20, 1, 5),
+      2: makeRow('Feature', 'Active', 0, 80, 4, 5),
     };
     const result = computeSummaryStats([1, 2], rowsById);
     expect(result.totalEffort).toBe(0);
-    // simple avg: (20 + 80) / 2 = 50
+    // global: (1 + 4) closed / (5 + 5) total = 50%
     expect(result.overallProgressPct).toBe(50);
   });
 
   it('counts byType across ALL items in rowsById', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 10, 50),
-      2: makeRow('Feature', 'Active', 5, 80),
-      3: makeRow('Feature', 'Closed', 3, 100),
+      1: makeRow('Epic', 'Active', 10, 50, 1, 2),
+      2: makeRow('Feature', 'Active', 5, 80, 4, 5),
+      3: makeRow('Feature', 'Closed', 3, 100, 1, 1),
     };
     const result = computeSummaryStats([1], rowsById);
     expect(result.byType['Epic']).toBe(1);
@@ -73,9 +77,9 @@ describe('computeSummaryStats', () => {
 
   it('counts byState across ALL items in rowsById', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 10, 50),
-      2: makeRow('Feature', 'Active', 5, 80),
-      3: makeRow('Feature', 'Closed', 3, 100),
+      1: makeRow('Epic', 'Active', 10, 50, 1, 2),
+      2: makeRow('Feature', 'Active', 5, 80, 4, 5),
+      3: makeRow('Feature', 'Closed', 3, 100, 1, 1),
     };
     const result = computeSummaryStats([1], rowsById);
     expect(result.byState['Active']).toBe(2);
@@ -84,7 +88,7 @@ describe('computeSummaryStats', () => {
 
   it('skips missing root ids gracefully', () => {
     const rowsById = {
-      1: makeRow('Epic', 'Active', 10, 50),
+      1: makeRow('Epic', 'Active', 10, 50, 1, 2),
     };
     // rootId 99 does not exist in rowsById
     const result = computeSummaryStats([1, 99], rowsById);
@@ -92,19 +96,9 @@ describe('computeSummaryStats', () => {
     expect(result.overallProgressPct).toBe(50);
   });
 
-  it('uses only valid root count as divisor for simple average (not rootIds.length)', () => {
-    const rowsById = {
-      1: makeRow('Epic', 'Active', 0, 60),
-    };
-    // rootId 99 missing — simple avg should be 60/1, not 60/2
-    const result = computeSummaryStats([1, 99], rowsById);
-    expect(result.totalEffort).toBe(0);
-    expect(result.overallProgressPct).toBe(60);
-  });
-
   it('handles single root with 100% progress', () => {
     const rowsById = {
-      5: makeRow('Epic', 'Closed', 8, 100),
+      5: makeRow('Epic', 'Closed', 8, 100, 3, 3),
     };
     const result = computeSummaryStats([5], rowsById);
     expect(result.overallProgressPct).toBe(100);
@@ -113,8 +107,8 @@ describe('computeSummaryStats', () => {
 
   it('ignores empty type/state strings in byType/byState', () => {
     const rowsById = {
-      1: makeRow('', 'Active', 5, 50),
-      2: makeRow('Epic', '', 5, 50),
+      1: makeRow('', 'Active', 5, 50, 1, 2),
+      2: makeRow('Epic', '', 5, 50, 1, 2),
     };
     const result = computeSummaryStats([1, 2], rowsById);
     expect('' in result.byType).toBe(false);

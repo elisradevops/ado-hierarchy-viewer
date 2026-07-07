@@ -2,10 +2,13 @@ import React, { useMemo } from 'react';
 import { Box, Link, Typography, alpha } from '@mui/material';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import LinkIcon from '@mui/icons-material/Link';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { StateChip } from './StateChip';
 import { ProgressBar, TimeProgressBar } from './ProgressBar';
 import { buildWorkItemUrl } from '../utils/adoUrlUtils';
 import { SEED_LINK_TYPES } from '../domain/adoLinkTypes';
+import { useHierarchyStore } from '../state/hierarchyStore';
 import type { FlatRow } from '../types';
 import type { Density } from '../state/uiPrefsStore';
 import type { ColumnDef } from '../constants/columns';
@@ -115,17 +118,21 @@ function relDisplayName(ref: string): string {
   return last.replace(/-Forward$|-Reverse$/, '');
 }
 
+// Chip label omits the " (Hierarchy)" suffix — every plain parent-child row would otherwise
+// repeat it; the full name (e.g. "Child (Hierarchy)") is still available via the chip's title tooltip.
+function relChipLabel(ref: string): string {
+  return relDisplayName(ref).replace(/\s*\(Hierarchy\)$/, '');
+}
+
 function relFamilyColor(ref: string): string {
   const family = (ref.split('.').pop() ?? '').replace(/-Forward$|-Reverse$/, '');
   return REL_FAMILY_COLORS[family] ?? '#6B7280';
 }
 
-// Primary hierarchy forward — no chip shown for this
-const PRIMARY_REL = 'System.LinkTypes.Hierarchy-Forward';
-
 const REL_CHIP_SX = {
   display: 'inline-flex',
   alignItems: 'center',
+  gap: '2px',
   fontSize: '0.58rem',
   fontWeight: 600,
   lineHeight: 1,
@@ -136,7 +143,11 @@ const REL_CHIP_SX = {
   flexShrink: 0,
 } as const;
 
-const REF_ROW_SX = { opacity: 0.6, fontStyle: 'italic' } as const;
+const REL_CHIP_ICON_SX = { fontSize: '10px' } as const;
+
+// Amber tint for nodes reached only via the selected-link-type recursive expansion
+// (scaffolding beyond the source query's own results) — same chip, different color + icon.
+const DISCOVERED_REL_COLOR = '#B45309';
 
 const ID_SX = {
   fontSize: '0.68rem',
@@ -267,21 +278,27 @@ export const TreeRow = React.memo(function TreeRow({
     }),
   }), [depth]);
 
-  // L3: fold isRef variant into rowSx so finalRowSx spread is avoided each render
+  // Relationship chip origin (below) still needs to know whether a query is active —
+  // rows are no longer dimmed for non-matches (the "Show only matches" toolbar toggle
+  // is the sole way to distinguish/filter them now — full legibility everywhere else).
+  const usedQueryId = useHierarchyStore(s => s.usedQueryId);
+
   const rowSx = useMemo(
-    () => {
-      const base = isActive
-        ? { ...ROW_ACTIVE_SX, gridTemplateColumns: gridCols }
-        : { ...ROW_INACTIVE_SX, gridTemplateColumns: gridCols };
-      return node.isRef ? { ...base, ...REF_ROW_SX } : base;
-    },
-    [isActive, gridCols, node.isRef]
+    () => (isActive
+      ? { ...ROW_ACTIVE_SX, gridTemplateColumns: gridCols }
+      : { ...ROW_INACTIVE_SX, gridTemplateColumns: gridCols }),
+    [isActive, gridCols]
   );
 
-  // Link-rel chip: show when linkRel is present and NOT the primary hierarchy
-  const showRelChip = !!node.linkRel && node.linkRel !== PRIMARY_REL;
-  const relColor = node.linkRel ? relFamilyColor(node.linkRel) : '';
-  const relLabel = node.linkRel ? relDisplayName(node.linkRel) : '';
+  // Relationship chip: shown on every row that has a parent (linkRel present), so users can
+  // always see how a node relates to its parent — not just for non-primary/discovered nodes.
+  // Amber "discovered" tint flags nodes reached only via recursive link-type expansion
+  // (scaffolding beyond the source query's own results), once a query defines that baseline.
+  const showRelChip = !!node.linkRel;
+  const isDiscoveredRel = !!usedQueryId && node.linkOrigin === 'link';
+  const relColor = node.linkRel ? (isDiscoveredRel ? DISCOVERED_REL_COLOR : relFamilyColor(node.linkRel)) : '';
+  const relLabel = node.linkRel ? relChipLabel(node.linkRel) : '';
+  const relTitle = node.linkRel ? relDisplayName(node.linkRel) : undefined;
 
   return (
     <Box tabIndex={0} onClick={() => onActivate(node.id)} sx={rowSx}>
@@ -301,7 +318,14 @@ export const TreeRow = React.memo(function TreeRow({
                   )}
                   <Box component="span" sx={{ ...TYPE_DOT_SX, backgroundColor: dotColor }} />
                   {showRelChip && (
-                    <Box component="span" sx={{ ...REL_CHIP_SX, bgcolor: alpha(relColor, 0.1), color: relColor, border: `1px solid ${alpha(relColor, 0.25)}` }}>
+                    <Box
+                      component="span"
+                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(relColor, 0.1), color: relColor, border: `1px solid ${alpha(relColor, 0.25)}` }}
+                      title={isDiscoveredRel ? `${relTitle} — found via recursive link-type expansion, not the source query` : relTitle}
+                    >
+                      {isDiscoveredRel
+                        ? <TravelExploreIcon sx={REL_CHIP_ICON_SX} />
+                        : <LinkIcon sx={REL_CHIP_ICON_SX} />}
                       {node.isRef ? '↑ ' : ''}{relLabel}
                     </Box>
                   )}
@@ -390,7 +414,7 @@ export const TreeRow = React.memo(function TreeRow({
           case 'progressPct':
             return (
               <Box key="progressPct" sx={cellSx}>
-                <ProgressBar value={node.progressPct} />
+                <ProgressBar value={node.progressPct} closedLeaves={node.closedLeaves} totalLeaves={node.totalLeaves} />
               </Box>
             );
           case 'effort':

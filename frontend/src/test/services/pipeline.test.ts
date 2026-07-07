@@ -212,4 +212,34 @@ describe('buildHierarchy', () => {
       expect(result.roots[0].progressPct).toBe(100);
     });
   });
+
+  describe('matchedIds → isQueryMatch', () => {
+    it('stamps isQueryMatch on nodes whose id is in matchedIds', () => {
+      const result = buildHierarchy(makeInput({
+        relations: LINEAR_RELATIONS, // 1→2→3
+        items: LINEAR_ITEMS,
+        matchedIds: [1, 3],
+      }));
+      expect(result.roots[0].isQueryMatch).toBe(true);
+      expect(result.roots[0].children[0].isQueryMatch).toBe(false);
+      expect(result.roots[0].children[0].children[0].isQueryMatch).toBe(true);
+    });
+
+    it('leaves isQueryMatch undefined when matchedIds is null', () => {
+      const result = buildHierarchy(makeInput({
+        relations: LINEAR_RELATIONS,
+        items: LINEAR_ITEMS,
+        matchedIds: null,
+      }));
+      expect(result.roots[0].isQueryMatch).toBeUndefined();
+    });
+
+    it('leaves isQueryMatch undefined when matchedIds is omitted', () => {
+      const result = buildHierarchy(makeInput({
+        relations: LINEAR_RELATIONS,
+        items: LINEAR_ITEMS,
+      }));
+      expect(result.roots[0].isQueryMatch).toBeUndefined();
+    });
+  });
 });

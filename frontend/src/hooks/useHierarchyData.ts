@@ -18,7 +18,7 @@ export function useHierarchyData(): {
   // N6: abort in-flight request on unmount so the store is not written after teardown
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  const { setResult, setLoading, setError, setUsedRelationTypes, loading, error } = useHierarchyStore();
+  const { setResult, setLoading, setError, setUsedRelationTypes, setUsedQueryId, setMatchedIds, loading, error } = useHierarchyStore();
   const { orgUrl, credential, mode } = useConnectionStore();
   const { config } = useConfigStore();
 
@@ -42,7 +42,7 @@ export function useHierarchyData(): {
     void (async () => {
       try {
         // Fetch raw ADO data — direct in extension mode, via BFF in standalone
-        const { workItemRelations, workItems, rootIds } = mode === 'extension'
+        const { workItemRelations, workItems, rootIds, matchedIds } = mode === 'extension'
           ? await fetchHierarchyDirect(config, orgUrl, credential, signal)
           : await fetchHierarchy(config, ctx, signal);
 
@@ -51,6 +51,8 @@ export function useHierarchyData(): {
         // Extract unique non-null relation types actually present in the result
         const usedRels = [...new Set(workItemRelations.map(r => r.rel).filter((r): r is string => !!r))];
         setUsedRelationTypes(usedRels);
+        setUsedQueryId(config.queryId ?? '');
+        setMatchedIds(matchedIds ?? null);
 
         // Run graph/tree algorithm (web worker if large)
         const result = await runHierarchyPipeline(
@@ -60,6 +62,7 @@ export function useHierarchyData(): {
             closedState: config.closedState,
             rootIds,
             selectedRels: config.relationTypes,
+            matchedIds,
           },
           signal
         );
@@ -80,7 +83,7 @@ export function useHierarchyData(): {
         if (generationRef.current === myGeneration) setLoading(false);
       }
     })();
-  }, [orgUrl, credential, config, mode, setResult, setLoading, setError, setUsedRelationTypes]);
+  }, [orgUrl, credential, config, mode, setResult, setLoading, setError, setUsedRelationTypes, setUsedQueryId, setMatchedIds]);
 
   return { loadHierarchy, loading, error };
 }

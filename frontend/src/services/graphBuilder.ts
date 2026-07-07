@@ -35,7 +35,7 @@ export function buildAdjacency(
   const seen = new Set<string>();
 
   for (const relation of relations) {
-    const { source, target, rel } = relation;
+    const { source, target, rel, origin } = relation;
     if (!source || !target) continue;
     if (!Number.isInteger(source.id) || !Number.isInteger(target.id)) continue;
 
@@ -47,13 +47,16 @@ export function buildAdjacency(
 
     if (parentId === childId) continue; // drop self-loops
 
+    // Dedup guard: "parentId-childId-rel" prevents duplicate edges. Note: query-vs-link
+    // origin precedence for the *same* pair is already resolved upstream (BFF / adoDirect
+    // merge query relations over link relations before this ever runs).
     const edgeKey = `${parentId}-${childId}-${rel ?? ''}`;
     if (seen.has(edgeKey)) continue;
     seen.add(edgeKey);
 
     const isRef = rel ? refRels.has(rel) : false;
 
-    const edge: AdjacencyEdge = { childId, rel: rel ?? 'unknown', isRef };
+    const edge: AdjacencyEdge = { childId, rel: rel ?? 'unknown', isRef, origin: origin ?? 'link' };
 
     if (!adjacency.has(parentId)) adjacency.set(parentId, []);
     adjacency.get(parentId)!.push(edge);

@@ -102,6 +102,18 @@ const FIELDS_SX = {
   gap: 1.5,
   overflowY: 'auto' as const,
   flexGrow: 1,
+  minHeight: 0,
+} as const;
+
+// Sits outside the scrollable FIELDS_SX region — stays visible even when the sidebar
+// is too short to show all fields without scrolling (e.g. ADO extension hub panel).
+const ACTION_BAR_SX = {
+  px: 2,
+  py: 1.5,
+  flexShrink: 0,
+  borderTop: '1px solid',
+  borderColor: 'divider',
+  bgcolor: 'background.paper',
 } as const;
 
 const FOOTER_SX = {
@@ -251,14 +263,17 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
       }),
     ]).then(([proj, rel]) => {
       if (cancelled) return;
-      if (fetchErrMsg) setMetaError(fetchErrMsg);
-      setProjects((proj as Array<{ id: string; name: string }>).map(p => p.name));
-      if ((rel as Array<{ referenceName: string; name: string }>).length > 0) {
-        setLinkTypes((rel as Array<{ referenceName: string; name: string }>).map(r => ({
-          referenceName: r.referenceName,
-          displayName: r.name,
-        })));
+      const relTyped = rel as Array<{ referenceName: string; name: string }>;
+      if (fetchErrMsg) {
+        setMetaError(fetchErrMsg);
+      } else if (relTyped.length === 0) {
+        setMetaError('No link types were returned by Azure DevOps for this project — check permissions, or reload the page.');
       }
+      setProjects((proj as Array<{ id: string; name: string }>).map(p => p.name));
+      setLinkTypes(relTyped.map(r => ({
+        referenceName: r.referenceName,
+        displayName: r.name,
+      })));
     }).finally(() => { if (!cancelled) setLoadingMeta(false); });
 
     return () => { cancelled = true; };
@@ -536,17 +551,6 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               </Box>
             </AccordionDetails>
           </Accordion>
-
-          {/* Load Hierarchy button */}
-          <Button
-            variant="contained"
-            fullWidth
-            onClick={onRun}
-            disabled={!config.teamProject || (config.relationTypes.length === 0 && !config.queryId)}
-            sx={{ mt: 0.5 }}
-          >
-            Load Hierarchy
-          </Button>
         </Box>
       ) : (
         /* Collapsed: show icon hints */
@@ -568,6 +572,22 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               </IconButton>
             </span>
           </Tooltip>
+        </Box>
+      )}
+
+      {/* ── Section 2b: Load Hierarchy action bar — pinned outside the scrollable
+           fields region so it stays reachable when the sidebar is short (e.g. ADO
+           extension hub with limited panel height) ── */}
+      {!sidebarCollapsed && (
+        <Box sx={ACTION_BAR_SX}>
+          <Button
+            variant="contained"
+            fullWidth
+            onClick={onRun}
+            disabled={!config.teamProject || (config.relationTypes.length === 0 && !config.queryId)}
+          >
+            Load Hierarchy
+          </Button>
         </Box>
       )}
 

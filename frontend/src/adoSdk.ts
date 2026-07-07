@@ -5,6 +5,10 @@
  */
 
 import * as SDK from 'azure-devops-extension-sdk';
+import type { IProjectPageService } from 'azure-devops-extension-api/Common';
+
+// CommonServiceIds.ProjectPageService — inlined to avoid const enum + isolatedModules error
+const PROJECT_PAGE_SERVICE_ID = 'ms.vss-tfs-web.tfs-page-data-service';
 
 export interface AdoContext {
   isAdo: boolean;
@@ -183,6 +187,19 @@ export async function initAdoContext(): Promise<AdoContext> {
       }
     } catch {
       /* ignore */
+    }
+
+    // Hub contributions often deliver webContext.project === null in the modern SDK.
+    // ProjectPageService is the authoritative async source for the current project.
+    if (!project?.name) {
+      try {
+        const svc = await Promise.race([
+          SDK.getService<IProjectPageService>(PROJECT_PAGE_SERVICE_ID),
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 1500)),
+        ]);
+        const info = svc ? await svc.getProject() : undefined;
+        if (info?.name) project = { ...project, ...info };
+      } catch { /* ignore — fall through to empty string below */ }
     }
 
     let collectionUri: string =

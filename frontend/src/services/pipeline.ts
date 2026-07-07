@@ -12,9 +12,10 @@ export function buildHierarchy(input: BuildHierarchyInput): BuildHierarchyResult
 
   const adjacency = buildAdjacency(relations, input.selectedRels);
   const rootIds = input.rootIds ?? findRoots(adjacency);
+  const matchedIdSet = input.matchedIds ? new Set(input.matchedIds) : undefined;
 
   const roots = rootIds
-    .map(id => buildTree(id, adjacency, itemsById, closedState))
+    .map(id => buildTree(id, adjacency, itemsById, closedState, new Set(), matchedIdSet))
     .filter((node): node is TreeNode => node !== null);
 
   // Collect all reachable ids (from tree traversal)

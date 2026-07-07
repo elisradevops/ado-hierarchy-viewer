@@ -27,6 +27,8 @@ interface UiPrefsStore {
   filter: FilterState;
   autoRefreshMs: number;
   sidebarCollapsed: boolean;
+  /** When true, the row list collapses to query filter matches (+ dimmed ancestor chain). Session-only. */
+  showOnlyMatches: boolean;
   /** Keys of columns the user has explicitly hidden. Always-visible columns are never in this set. */
   hiddenCols: string[];
   /** Per-column widths overriding the default css track width (px). Empty = all defaults. */
@@ -41,6 +43,7 @@ interface UiPrefsStore {
   setAutoRefreshMs: (ms: number) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
+  toggleShowOnlyMatches: () => void;
   toggleCol: (key: string) => void;
   resetCols: () => void;
   setColWidth: (key: string, px: number) => void;
@@ -56,6 +59,7 @@ export const useUiPrefsStore = create<UiPrefsStore>()(
       filter: { text: '', types: [], states: [] },
       autoRefreshMs: 0,
       sidebarCollapsed: false,
+      showOnlyMatches: false,
       hiddenCols: DEFAULT_HIDDEN_COLS,
       colWidths: {},
 
@@ -91,6 +95,8 @@ export const useUiPrefsStore = create<UiPrefsStore>()(
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
 
       toggleSidebar: () => set(state => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+
+      toggleShowOnlyMatches: () => set(state => ({ showOnlyMatches: !state.showOnlyMatches })),
 
       toggleCol: (key) => set(state => {
         const isHidden = state.hiddenCols.includes(key);

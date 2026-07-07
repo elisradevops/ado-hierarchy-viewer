@@ -80,7 +80,7 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
   const rowsById = useHierarchyStore(s => s.rowsById);
   const totalRows = useHierarchyStore(s => s.rowCount);
   const { expandedIds, toggle, expandAll, collapseAll } = useExpandCollapse();
-  const { sort, filter, setSort, density, hiddenCols, colWidths, setColWidth } = useUiPrefsStore();
+  const { sort, filter, setSort, density, hiddenCols, colWidths, setColWidth, showOnlyMatches } = useUiPrefsStore();
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const teamProject = useConfigStore(s => s.config.teamProject);
   const apiTypeColors = useWorkItemMetaStore(s => s.typeColors);
@@ -149,9 +149,9 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
 
   const visibleRows: FlatRow[] = useMemo(() => {
     const flat = flattenTree(roots, expandedIds);
-    const filtered = filterRows(flat, filter);
+    const filtered = filterRows(flat, { ...filter, matchesOnly: showOnlyMatches });
     return sortRows(filtered, sort.col as SortCol, sort.dir);
-  }, [roots, expandedIds, filter, sort]);
+  }, [roots, expandedIds, filter, showOnlyMatches, sort]);
 
   // #4: memoize O(N) findIndex so it only runs when visibleRows or activeId changes
   const activeIndex = useMemo(
