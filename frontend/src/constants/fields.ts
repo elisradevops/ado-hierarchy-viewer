@@ -20,7 +20,8 @@ export const WI_BASE_FIELDS = [
   'Microsoft.VSTS.Scheduling.OriginalEstimate',
 ] as const;
 
-// All known fields to exclude from effort heuristic
+// All known/fixed fields — anything requested but outside this set is a custom query
+// column and goes into WorkItem.extraFields instead (see buildDynamicColumns).
 export const KNOWN_FIELD_NAMES = new Set<string>([
   'System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.TeamProject',
   'System.AssignedTo', 'System.AreaPath', 'System.IterationPath', 'System.Tags',
@@ -28,6 +29,7 @@ export const KNOWN_FIELD_NAMES = new Set<string>([
   'Microsoft.VSTS.Scheduling.StoryPoints',
   'Microsoft.VSTS.Scheduling.RemainingWork',
   'Microsoft.VSTS.Scheduling.OriginalEstimate',
+  'Microsoft.VSTS.Scheduling.CompletedWork',
 ]);
 
 // Returns the full fields array including the effort field (deduped)

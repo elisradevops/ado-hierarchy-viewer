@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TreeNode, BuildHierarchyResult } from '../types';
+import type { TreeNode, BuildHierarchyResult, QueryColumn } from '../types';
 
 interface HierarchyStore {
   rootIds: number[];
@@ -14,11 +14,14 @@ interface HierarchyStore {
   usedQueryId: string;
   /** True filter-match ids from the source query. Null = no query active or matches undeterminable (strict mode unavailable). */
   matchedIds: number[] | null;
+  /** The baseline query's own column set (order preserved) — drives dynamic columns (see constants/columns.ts). Empty when no query loaded or the query declared none. */
+  queryColumns: QueryColumn[];
 
   setResult: (result: BuildHierarchyResult) => void;
   setUsedRelationTypes: (types: string[]) => void;
   setUsedQueryId: (queryId: string) => void;
   setMatchedIds: (matchedIds: number[] | null) => void;
+  setQueryColumns: (queryColumns: QueryColumn[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clear: () => void;
@@ -35,6 +38,7 @@ export const useHierarchyStore = create<HierarchyStore>((set) => ({
   usedRelationTypes: [],
   usedQueryId: '',
   matchedIds: null,
+  queryColumns: [],
 
   setResult: (result) => {
     // Build Record<number, TreeNode> for O(1) lookup — iterative DFS, stack-safe at any depth
@@ -60,7 +64,8 @@ export const useHierarchyStore = create<HierarchyStore>((set) => ({
   setUsedRelationTypes: (types) => set({ usedRelationTypes: types }),
   setUsedQueryId: (queryId) => set({ usedQueryId: queryId }),
   setMatchedIds: (matchedIds) => set({ matchedIds }),
+  setQueryColumns: (queryColumns) => set({ queryColumns }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error, loading: false }),
-  clear: () => set({ rootIds: [], rowsById: {}, rowCount: 0, orphanIds: [], loading: false, error: null, lastFetchedAt: null, usedRelationTypes: [], usedQueryId: '', matchedIds: null }),
+  clear: () => set({ rootIds: [], rowsById: {}, rowCount: 0, orphanIds: [], loading: false, error: null, lastFetchedAt: null, usedRelationTypes: [], usedQueryId: '', matchedIds: null, queryColumns: [] }),
 }));

@@ -93,3 +93,38 @@ describe('filterRows — matchesOnly', () => {
     expect(result.map(r => r.node.id)).toEqual([1, 2, 3]);
   });
 });
+
+describe('filterRows — free-text search over extraFields (dynamic query columns)', () => {
+  it('matches a row whose value only exists in a dynamic query column', () => {
+    const rows: FlatRow[] = [
+      makeRow(1, 0, false, null, { title: 'Unrelated title', extraFields: { 'Custom.RiskLevel': 'High' } }),
+      makeRow(2, 0, false, null, { title: 'Also unrelated', extraFields: { 'Custom.RiskLevel': 'Low' } }),
+    ];
+    const result = filterRows(rows, { text: 'high', types: [], states: [] });
+    expect(result.map(r => r.node.id)).toEqual([1]);
+  });
+
+  it('does not match when extraFields is absent', () => {
+    const rows: FlatRow[] = [makeRow(1, 0, false, null, { title: 'No extra fields' })];
+    const result = filterRows(rows, { text: 'risklevel', types: [], states: [] });
+    expect(result).toEqual([]);
+  });
+
+  it('ignores null/undefined extraFields values without throwing', () => {
+    const rows: FlatRow[] = [makeRow(1, 0, false, null, { title: 'T', extraFields: { 'Custom.Empty': null } })];
+    const result = filterRows(rows, { text: 'empty', types: [], states: [] });
+    expect(result).toEqual([]);
+  });
+
+  it('excludes HTML-rich field values from search entirely, by design', () => {
+    const rows: FlatRow[] = [
+      makeRow(1, 0, false, null, {
+        title: 'Unrelated title',
+        extraFields: { 'System.Description': '<p dir="auto">Fixes login timeout</p>' },
+      }),
+    ];
+    // "login" only appears inside the HTML description — must NOT match.
+    const result = filterRows(rows, { text: 'login', types: [], states: [] });
+    expect(result).toEqual([]);
+  });
+});

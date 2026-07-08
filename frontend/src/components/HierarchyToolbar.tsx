@@ -20,13 +20,15 @@ import CheckBoxIcon from '@mui/icons-material/CheckBox';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
-import { COLUMN_DEFS } from '../constants/columns';
+import { COLUMN_DEFS, buildDynamicColumns } from '../constants/columns';
 import { useHierarchyStore } from '../state/hierarchyStore';
+import { useConfigStore } from '../state/configStore';
 import { AUTO_REFRESH_OPTIONS } from '../constants/ui';
 import { downloadCsv, flatRowsToCsv } from '../utils/exportCsv';
 import { copyToClipboard, flatRowsToTsv } from '../utils/clipboard';
 import { getFacetValues } from '../selectors/facetValues';
 import { FilterMenu } from './FilterMenu';
+import { LegendPopover } from './LegendPopover';
 import type { FlatRow } from '../types';
 
 // ─── sx constants ────────────────────────────────────────────────
@@ -72,6 +74,8 @@ export function HierarchyToolbar({
   const rowsById = useHierarchyStore(s => s.rowsById);
   const usedQueryId = useHierarchyStore(s => s.usedQueryId);
   const matchedIds = useHierarchyStore(s => s.matchedIds);
+  const queryColumns = useHierarchyStore(s => s.queryColumns);
+  const effortField = useConfigStore(s => s.config.effortField);
   const matchesAvailable = !!usedQueryId && matchedIds !== null;
   const facets = useMemo(() => getFacetValues(rowsById), [rowsById]);
   const [localText, setLocalText] = useState(filter.text);
@@ -83,6 +87,12 @@ export function HierarchyToolbar({
 
   // Non-always columns — drives the Columns menu
   const toggleableColumns = useMemo(() => COLUMN_DEFS.filter(c => !c.always), []);
+  // Baseline query's own custom columns — same augment-mode columns HierarchyTreeTable
+  // renders in the tree, exposed here so they're actually hideable (see finding #3).
+  const dynamicColumns = useMemo(
+    () => buildDynamicColumns(queryColumns, effortField),
+    [queryColumns, effortField]
+  );
 
   const currentArOpt = AUTO_REFRESH_OPTIONS.find(o => o.value === autoRefreshMs) ?? AUTO_REFRESH_OPTIONS[0];
   const arActive = autoRefreshMs > 0;
@@ -253,6 +263,28 @@ export function HierarchyToolbar({
             </MenuItem>
           );
         })}
+        {dynamicColumns.length > 0 && (
+          <>
+            <Divider sx={{ my: 0.5 }} />
+            <Typography variant="caption" sx={{ px: 2, pt: 0.25, pb: 0.25, display: 'block', fontWeight: 600, color: 'text.secondary' }}>
+              Query columns
+            </Typography>
+            {dynamicColumns.map(col => {
+              const visible = !hiddenCols.includes(col.key);
+              return (
+                <MenuItem key={col.key} dense onClick={() => toggleCol(col.key)}>
+                  <ListItemIcon sx={{ minWidth: 28 }}>
+                    {visible
+                      ? <CheckBoxIcon fontSize="small" color="primary" />
+                      : <CheckBoxOutlineBlankIcon fontSize="small" />
+                    }
+                  </ListItemIcon>
+                  {col.label}
+                </MenuItem>
+              );
+            })}
+          </>
+        )}
         <Divider sx={{ mt: 0.5 }} />
         <MenuItem dense onClick={() => { resetCols(); setColAnchor(null); }}>
           <ListItemIcon sx={{ minWidth: 28 }}>
@@ -261,6 +293,11 @@ export function HierarchyToolbar({
           Reset to defaults
         </MenuItem>
       </Menu>
+
+      <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
+
+      {/* Segment 6: Legend — explains chip colors/icons used in the tree */}
+      <LegendPopover />
 
       {/* Copy success snackbar */}
       <Snackbar

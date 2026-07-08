@@ -1,3 +1,4 @@
+import { looksLikeHtml } from '../utils/htmlFieldText';
 import type { FlatRow } from '../types';
 
 export interface FilterCriteria {
@@ -17,7 +18,18 @@ function matchesFilter(row: FlatRow, criteria: FilterCriteria): boolean {
     const lower = text.toLowerCase();
     const titleMatch = row.node.title.toLowerCase().includes(lower);
     const idMatch = String(row.node.id).includes(lower);
-    if (!titleMatch && !idMatch) return false;
+    // Also match against dynamic query-column values (see TreeNode.extraFields) — the
+    // free-text box otherwise silently ignores data the user can see in those columns.
+    // HTML-rich fields (Description, Repro Steps, etc.) are excluded outright — by design,
+    // not searched (see HtmlFieldCell.tsx for how they're displayed instead).
+    const extraFields = row.node.extraFields;
+    const extraFieldMatch = !!extraFields && Object.values(extraFields).some(v => {
+      if (v == null) return false;
+      const str = String(v);
+      if (looksLikeHtml(str)) return false;
+      return str.toLowerCase().includes(lower);
+    });
+    if (!titleMatch && !idMatch && !extraFieldMatch) return false;
   }
 
   if (types.length > 0 && !types.includes(row.node.type)) return false;

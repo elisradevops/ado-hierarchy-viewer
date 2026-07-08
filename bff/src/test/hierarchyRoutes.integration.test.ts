@@ -6,7 +6,7 @@ import * as HierarchyService from '../services/HierarchyService';
 jest.mock('../services/HierarchyService', () => ({
   fetchLinks: jest.fn().mockResolvedValue([]),
   fetchWorkItems: jest.fn().mockResolvedValue([]),
-  fetchQueryRootIds: jest.fn().mockResolvedValue({ rootIds: [], queryRelations: [], matchedIds: null }),
+  fetchQueryRootIds: jest.fn().mockResolvedValue({ rootIds: [], queryRelations: [], matchedIds: null, queryColumns: [] }),
   classifyMissingIds: jest.fn().mockResolvedValue(new Map()),
 }));
 
@@ -193,7 +193,7 @@ describe('BFF route integration', () => {
 
     it('returns matchedIds from fetchQueryRootIds when a queryId is supplied', async () => {
       mockFetchQueryRootIds.mockResolvedValueOnce({
-        rootIds: [1], queryRelations: [], matchedIds: [1, 2, 3],
+        rootIds: [1], queryRelations: [], matchedIds: [1, 2, 3], queryColumns: [],
       });
 
       const res = await request(app)
@@ -214,11 +214,68 @@ describe('BFF route integration', () => {
       expect(res.status).toBe(422);
     });
 
+    it('unions the baseline query\'s own columns into the fields requested from fetchWorkItems', async () => {
+      mockFetchQueryRootIds.mockResolvedValueOnce({
+        rootIds: [1], queryRelations: [], matchedIds: null,
+        queryColumns: [{ referenceName: 'Custom.RiskLevel', name: 'Risk Level' }],
+      });
+      mockFetchWorkItems.mockResolvedValueOnce([
+        { id: 1, type: 'Task', title: 'T1', state: 'Active', teamProject: 'MyProject', effort: null },
+      ]);
+
+      const res = await request(app)
+        .post('/api/hierarchy')
+        .set(ADO_HEADERS)
+        .send({ project: 'MyProject', relationTypes: [], queryId: 'q-1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.queryColumns).toEqual([{ referenceName: 'Custom.RiskLevel', name: 'Risk Level' }]);
+      expect(mockFetchWorkItems).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.any(String),
+        expect.arrayContaining([1]),
+        expect.arrayContaining(['Custom.RiskLevel']),
+        expect.any(String),
+        true
+      );
+    });
+
+    it('resolves newly discovered ids across a second link-follow hop', async () => {
+      // Root 1 → link discovers 2 (hop 0); 2 → link discovers 3 (hop 1) — exercises the
+      // hop loop's second iteration actually resolving+bucketing a real item (id 3).
+      mockFetchQueryRootIds.mockResolvedValueOnce({
+        rootIds: [1], queryRelations: [], matchedIds: null, queryColumns: [],
+      });
+      mockFetchWorkItems
+        .mockResolvedValueOnce([ // seed items (id 1)
+          { id: 1, type: 'Task', title: 'T1', state: 'Active', teamProject: 'MyProject', effort: null },
+        ])
+        .mockResolvedValueOnce([ // hop 0 resolves id 2
+          { id: 2, type: 'Task', title: 'T2', state: 'Active', teamProject: 'MyProject', effort: null },
+        ])
+        .mockResolvedValueOnce([ // hop 1 resolves id 3
+          { id: 3, type: 'Task', title: 'T3', state: 'Active', teamProject: 'MyProject', effort: null },
+        ]);
+      mockFetchLinks
+        .mockResolvedValueOnce([{ rel: 'X', source: { id: 1 }, target: { id: 2 } }])
+        .mockResolvedValueOnce([{ rel: 'X', source: { id: 2 }, target: { id: 3 } }])
+        .mockResolvedValueOnce([]);
+
+      const res = await request(app)
+        .post('/api/hierarchy')
+        .set(ADO_HEADERS)
+        .send({ project: 'MyProject', relationTypes: ['X'], queryId: 'q-1' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.workItems.map((w: { id: number }) => w.id).sort()).toEqual([1, 2, 3]);
+    });
+
     it('extracts unique IDs from non-empty relations (covers source/target filter+map arrows)', async () => {
       // Link-following is seeded from the query's root ids — id 1 is the query baseline;
       // 2 and 3 are discovered by extending outward via the selected link type.
       mockFetchQueryRootIds.mockResolvedValueOnce({
-        rootIds: [1], queryRelations: [], matchedIds: null,
+        rootIds: [1], queryRelations: [], matchedIds: null, queryColumns: [],
       });
       mockFetchLinks.mockResolvedValueOnce([
         { rel: 'X', source: { id: 1 }, target: { id: 2 } },
@@ -255,7 +312,7 @@ describe('BFF route integration', () => {
       // happens with cross-project (tree/oneHop) queries. The BFS must query links
       // scoped to "OtherProject" (where 1 actually lives), not "MyProject".
       mockFetchQueryRootIds.mockResolvedValueOnce({
-        rootIds: [1], queryRelations: [], matchedIds: null,
+        rootIds: [1], queryRelations: [], matchedIds: null, queryColumns: [],
       });
       mockFetchWorkItems.mockResolvedValueOnce([
         { id: 1, type: 'Task', title: 'T1', state: 'Active', teamProject: 'OtherProject', effort: null },
@@ -280,7 +337,7 @@ describe('BFF route integration', () => {
 
     it('propagates service errors through errorHandler', async () => {
       mockFetchQueryRootIds.mockResolvedValueOnce({
-        rootIds: [1], queryRelations: [], matchedIds: null,
+        rootIds: [1], queryRelations: [], matchedIds: null, queryColumns: [],
       });
       // The BFS resolves the seed item first (to bucket the frontier by its real
       // project) before ever calling fetchLinks — mock that resolution so the frontier

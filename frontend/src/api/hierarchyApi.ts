@@ -1,4 +1,4 @@
-import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode } from '../types';
+import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode, QueryColumn } from '../types';
 import type { HierarchyConfig, AuthCtx } from '../types';
 import type { WorkItemTypeMeta } from '../state/workItemMetaStore';
 import { httpClient, withRetry, MAX_RETRIES } from './httpClient';
@@ -137,7 +137,7 @@ export async function fetchHierarchy(
   config: HierarchyConfig,
   ctx: AuthCtx,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null; missingIdReasons: Record<number, MissingIdReason> }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null; missingIdReasons: Record<number, MissingIdReason>; queryColumns: QueryColumn[] }> {
   const response = await withRetry(() =>
     httpClient.post<{
       workItemRelations: WorkItemRelation[];
@@ -145,6 +145,7 @@ export async function fetchHierarchy(
       rootIds?: number[];
       matchedIds: number[] | null;
       missingIdReasons?: Record<number, MissingIdReason>;
+      queryColumns?: QueryColumn[];
     }>(
       '/hierarchy',
       {
@@ -163,6 +164,6 @@ export async function fetchHierarchy(
     signal
   );
   return response.data
-    ? { ...response.data, missingIdReasons: response.data.missingIdReasons ?? {} }
-    : { workItemRelations: [], workItems: [], matchedIds: null, missingIdReasons: {} };
+    ? { ...response.data, missingIdReasons: response.data.missingIdReasons ?? {}, queryColumns: response.data.queryColumns ?? [] }
+    : { workItemRelations: [], workItems: [], matchedIds: null, missingIdReasons: {}, queryColumns: [] };
 }

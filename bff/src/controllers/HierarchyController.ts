@@ -101,7 +101,6 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
   try {
     const client = new AdoClient(creds.token);
     const { project, relationTypes, effortField, queryId } = parsed.data;
-    const fields = [...new Set([...BASE_WI_FIELDS, effortField ?? DEFAULT_EFFORT_FIELD])];
     const resolvedEffortField = effortField ?? DEFAULT_EFFORT_FIELD;
 
     // The query is always the baseline — link types only extend outward from the
@@ -113,6 +112,16 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
     const queryRootIds = q.rootIds;
     const queryRelations = q.queryRelations;
     const matchedIds = q.matchedIds;
+    const queryColumns = q.queryColumns ?? [];
+
+    // Base fields (incl. all effort fields) are always fetched so Progress/Time can always
+    // be computed — the query's own columns are unioned in on top for dynamic columns (see
+    // constants/columns.ts buildDynamicColumns on the frontend).
+    const fields = [...new Set([
+      ...BASE_WI_FIELDS,
+      resolvedEffortField,
+      ...queryColumns.map(c => c.referenceName),
+    ])];
 
     // Seed = every node the query touched (roots + all relation endpoints).
     const seedIds = new Set<number>(queryRootIds);
@@ -214,6 +223,7 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
       rootIds: queryRootIds,
       matchedIds,
       missingIdReasons: Object.fromEntries(missingIdReasons),
+      queryColumns,
     });
   } catch (err) {
     next(err);

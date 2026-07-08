@@ -7,6 +7,8 @@ import {
   unionAndFilterMatches,
   isUnresolvableMacro,
   escapeWiqlLiteral,
+  extractQueryColumns,
+  extractExtraFields,
   type WorkItemQueryClause,
 } from '../index';
 
@@ -158,5 +160,64 @@ describe('unionAndFilterMatches', () => {
 
   it('one bucket null -> union is just the other bucket', () => {
     expect(unionAndFilterMatches(null, [1, 2], new Set([1, 2]))).toEqual([1, 2]);
+  });
+});
+
+describe('extractQueryColumns', () => {
+  it('maps referenceName/name pairs through unchanged', () => {
+    const result = extractQueryColumns([
+      { referenceName: 'System.Title', name: 'Title' },
+      { referenceName: 'Custom.RiskLevel', name: 'Risk Level' },
+    ]);
+    expect(result).toEqual([
+      { referenceName: 'System.Title', name: 'Title' },
+      { referenceName: 'Custom.RiskLevel', name: 'Risk Level' },
+    ]);
+  });
+
+  it('filters out entries missing referenceName or name', () => {
+    const result = extractQueryColumns([
+      { referenceName: 'System.Title', name: 'Title' },
+      { referenceName: 'Custom.Foo' }, // missing name
+      { name: 'Bar' }, // missing referenceName
+    ]);
+    expect(result).toEqual([{ referenceName: 'System.Title', name: 'Title' }]);
+  });
+
+  it('returns an empty array for undefined or non-array input', () => {
+    expect(extractQueryColumns(undefined)).toEqual([]);
+  });
+});
+
+describe('extractExtraFields', () => {
+  const isKnown = (f: string): boolean => f.startsWith('System.');
+
+  it('collects requested fields outside the known set', () => {
+    const result = extractExtraFields(
+      ['System.Title', 'Custom.RiskLevel'],
+      { 'System.Title': 'T1', 'Custom.RiskLevel': 'High' },
+      isKnown
+    );
+    expect(result).toEqual({ 'Custom.RiskLevel': 'High' });
+  });
+
+  it('excludes the effort field even when it is outside the known set', () => {
+    const result = extractExtraFields(
+      ['System.Title', 'Custom.Effort'],
+      { 'System.Title': 'T1', 'Custom.Effort': 5 },
+      isKnown,
+      'Custom.Effort'
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('returns undefined when nothing qualifies as extra', () => {
+    const result = extractExtraFields(['System.Title'], { 'System.Title': 'T1' }, isKnown);
+    expect(result).toBeUndefined();
+  });
+
+  it('skips fields absent from the raw fields object', () => {
+    const result = extractExtraFields(['Custom.Missing'], {}, isKnown);
+    expect(result).toBeUndefined();
   });
 });

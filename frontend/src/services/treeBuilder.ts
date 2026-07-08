@@ -193,6 +193,7 @@ export function buildTree(
       originalEstimate: item.originalEstimate,
       completedWork: item.completedWork,
       placeholderReason: item.placeholderReason,
+      extraFields: item.extraFields,
       linkRel: n.linkRel,
       isRef: n.isRef,
       multiParents: multiParents?.get(n.id),

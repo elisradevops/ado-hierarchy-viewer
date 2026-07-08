@@ -20,6 +20,8 @@ import { useWorkItemMetaStore } from '../state/workItemMetaStore';
 import { useConnectionStore } from '../state/connectionStore';
 import { TYPE_COLORS, TYPE_ICON_IDS, TYPE_DOT_FALLBACK } from './TreeRow';
 import { getStateDotColor } from '../theme/stateDot';
+import { InfoTip } from './InfoTip';
+import { HELP } from '../constants/helpText';
 
 // ─── sx constants ────────────────────────────────────────────────
 const POPOVER_PAPER_PROPS: PaperProps = {
@@ -251,12 +253,15 @@ export function FilterMenu({
             {(availableTypes.length > 0 || availableStates.length > 0) && (
               <Divider sx={{ mb: 1.5 }} />
             )}
-            <FormControlLabel
-              sx={{ ...FORM_CONTROL_LABEL_SX, ...MATCH_ROW_SX, width: '100%', ml: 0 }}
-              labelPlacement="start"
-              control={<Switch size="small" checked={showOnlyMatches} onChange={onToggleShowOnlyMatches} />}
-              label="Show only query matches"
-            />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, width: '100%' }}>
+              <FormControlLabel
+                sx={{ ...FORM_CONTROL_LABEL_SX, ...MATCH_ROW_SX, flexGrow: 1, ml: 0 }}
+                labelPlacement="start"
+                control={<Switch size="small" checked={showOnlyMatches} onChange={onToggleShowOnlyMatches} />}
+                label="Show only query matches"
+              />
+              <InfoTip text={HELP.showOnlyMatches} ariaLabel="About Show only query matches" />
+            </Box>
           </>
         )}
 

@@ -18,7 +18,7 @@ export function useHierarchyData(): {
   // N6: abort in-flight request on unmount so the store is not written after teardown
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  const { setResult, setLoading, setError, setUsedRelationTypes, setUsedQueryId, setMatchedIds, loading, error } = useHierarchyStore();
+  const { setResult, setLoading, setError, setUsedRelationTypes, setUsedQueryId, setMatchedIds, setQueryColumns, loading, error } = useHierarchyStore();
   const { orgUrl, credential, mode } = useConnectionStore();
   const { config } = useConfigStore();
 
@@ -42,7 +42,7 @@ export function useHierarchyData(): {
     void (async () => {
       try {
         // Fetch raw ADO data — direct in extension mode, via BFF in standalone
-        const { workItemRelations, workItems, rootIds, matchedIds, missingIdReasons } = mode === 'extension'
+        const { workItemRelations, workItems, rootIds, matchedIds, missingIdReasons, queryColumns } = mode === 'extension'
           ? await fetchHierarchyDirect(config, orgUrl, credential, signal)
           : await fetchHierarchy(config, ctx, signal);
 
@@ -53,6 +53,7 @@ export function useHierarchyData(): {
         setUsedRelationTypes(usedRels);
         setUsedQueryId(config.queryId ?? '');
         setMatchedIds(matchedIds ?? null);
+        setQueryColumns(queryColumns ?? []);
 
         // Run graph/tree algorithm (web worker if large)
         const result = await runHierarchyPipeline(
@@ -84,7 +85,7 @@ export function useHierarchyData(): {
         if (generationRef.current === myGeneration) setLoading(false);
       }
     })();
-  }, [orgUrl, credential, config, mode, setResult, setLoading, setError, setUsedRelationTypes, setUsedQueryId, setMatchedIds]);
+  }, [orgUrl, credential, config, mode, setResult, setLoading, setError, setUsedRelationTypes, setUsedQueryId, setMatchedIds, setQueryColumns]);
 
   return { loadHierarchy, loading, error };
 }

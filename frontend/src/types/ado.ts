@@ -26,6 +26,17 @@ export interface WorkItem {
   /** Set only on synthetic placeholders (see treeBuilder.makePlaceholder) — why this linked
    *  id never resolved to a real work item: no access to it, deleted, or unexplained. */
   placeholderReason?: 'restricted' | 'deleted' | 'missing';
+  /** Raw values for fields the baseline query declared that aren't one of the fixed
+   *  properties above — keyed by ADO field reference name. Powers dynamic query columns
+   *  (see constants/columns.ts buildDynamicColumns). Undefined when the query added no
+   *  custom fields. */
+  extraFields?: Record<string, unknown>;
+}
+
+/** One column the baseline ADO query itself declares (query GET / WIQL response `columns`). */
+export interface QueryColumn {
+  referenceName: string;
+  name: string;
 }
 
 export interface WiqlWorkItemRelationsResponse {

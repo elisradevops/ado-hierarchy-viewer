@@ -18,7 +18,7 @@ import { flattenTree } from '../selectors/flattenTree';
 import { filterRows } from '../selectors/filterRows';
 import { sortRows, type SortCol } from '../selectors/sortRows';
 import { ROW_HEIGHT } from '../constants/ui';
-import { COLUMN_DEFS, buildGridCols, buildMinTableWidth, type ColumnDef } from '../constants/columns';
+import { COLUMN_DEFS, buildGridCols, buildMinTableWidth, buildDynamicColumns, DYNAMIC_COL_PREFIX, type ColumnDef } from '../constants/columns';
 import { useWorkItemMetaStore } from '../state/workItemMetaStore';
 import type { FlatRow } from '../types';
 
@@ -86,10 +86,12 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
   const rootIds = useHierarchyStore(s => s.rootIds);
   const rowsById = useHierarchyStore(s => s.rowsById);
   const totalRows = useHierarchyStore(s => s.rowCount);
+  const queryColumns = useHierarchyStore(s => s.queryColumns);
   const { expandedIds, toggle, expandAll, collapseAll } = useExpandCollapse();
   const { sort, filter, setSort, density, hiddenCols, colWidths, setColWidth, showOnlyMatches } = useUiPrefsStore();
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const teamProject = useConfigStore(s => s.config.teamProject);
+  const effortField = useConfigStore(s => s.config.effortField);
   const apiTypeColors = useWorkItemMetaStore(s => s.typeColors);
   const rawApiTypeIconUrls = useWorkItemMetaStore(s => s.typeIconUrls);
   const fieldsByType = useWorkItemMetaStore(s => s.fieldsByType);
@@ -113,6 +115,13 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
     [rowsById]
   );
 
+  // Stable key so visibleColumns doesn't recompute on every re-fetch when the query's
+  // own column set hasn't actually changed (same pattern as presentTypesKey below).
+  const queryColumnsKey = useMemo(
+    () => queryColumns.map(c => c.referenceName).join(','),
+    [queryColumns]
+  );
+
   const visibleColumns = useMemo((): ColumnDef[] => {
     // Collect present WIT types from the stable key
     const presentTypes = new Set<string>(presentTypesKey ? presentTypesKey.split(',') : []);
@@ -123,15 +132,37 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
         for (const f of (fieldsByType[type] ?? [])) supportedFields.add(f);
       }
     }
-    return COLUMN_DEFS.filter(col => {
+    const queryFields = new Set<string>(queryColumnsKey ? queryColumnsKey.split(',') : []);
+    const queryDrivesColumns = queryFields.size > 0;
+
+    const fixed = COLUMN_DEFS.filter(col => {
       if (col.always) return true;
       // User hid this column explicitly — never show unless it's always-visible
       if (hiddenCols.includes(col.key)) return false;
-      if (!col.field) return true;                        // computed columns (effort, progress) always show
+      if (!col.field) return true; // computed columns (effort, progress) always show
+      // Query declares its own columns — that set drives visibility for fixed optional
+      // columns too (augment mode), instead of falling back to WIT-field-support.
+      if (queryDrivesColumns) return queryFields.has(col.field);
       if (Object.keys(fieldsByType).length === 0) return true; // meta not loaded — show all (fallback)
-      return supportedFields.has(col.field);
+      return supportedFields.has(col.field); // no query columns — previous WIT-support rule
     });
-  }, [presentTypesKey, fieldsByType, hiddenCols]);
+
+    if (!queryDrivesColumns) return fixed;
+
+    // Splice the query's genuinely custom columns (not already one of the fixed ones
+    // above) in ahead of the always-shown computed tail (Progress, Time). Excludes the
+    // configured effort field too — when it's also one of the query's own columns, its
+    // value already shows via Progress/Time and shouldn't render a second time.
+    const dynamic = buildDynamicColumns(queryColumns, effortField).filter(c => !hiddenCols.includes(c.key));
+    const tailStart = fixed.findIndex(c => c.key === 'progressPct');
+    if (tailStart === -1) return [...fixed, ...dynamic];
+    return [...fixed.slice(0, tailStart), ...dynamic, ...fixed.slice(tailStart)];
+    // queryColumns itself is intentionally NOT a dep here — queryColumnsKey is its derived
+    // stable form (referenceNames joined). A new store-set queryColumns array with
+    // identical referenceNames must not force a recompute; only listing the key, not the
+    // source array, keeps that guarantee (same pattern as presentTypesKey/rowsById above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentTypesKey, fieldsByType, hiddenCols, queryColumnsKey, effortField]);
 
   const gridCols = useMemo(() => buildGridCols(visibleColumns, colWidths), [visibleColumns, colWidths]);
   const minTableWidth = useMemo(() => buildMinTableWidth(visibleColumns, 200, colWidths), [visibleColumns, colWidths]);
@@ -287,13 +318,20 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
                 key={col.key}
                 sx={{ ...HEADER_CELL_SX, textAlign: col.align ?? 'left', position: 'relative' }}
               >
-                <TableSortLabel
-                  active={sort.col === col.key}
-                  direction={sort.col === col.key ? sort.dir : 'asc'}
-                  onClick={() => handleColSort(col.key as SortCol)}
-                >
-                  {col.label}
-                </TableSortLabel>
+                {col.key.startsWith(DYNAMIC_COL_PREFIX) ? (
+                  // Dynamic query columns aren't wired into sortRows.ts yet — a sort
+                  // arrow here would toggle but silently never reorder rows, so render
+                  // plain text instead of a misleading interactive TableSortLabel.
+                  col.label
+                ) : (
+                  <TableSortLabel
+                    active={sort.col === col.key}
+                    direction={sort.col === col.key ? sort.dir : 'asc'}
+                    onClick={() => handleColSort(col.key as SortCol)}
+                  >
+                    {col.label}
+                  </TableSortLabel>
+                )}
                 <Box
                   sx={RESIZE_HANDLE_SX}
                   onPointerDown={(e) => {

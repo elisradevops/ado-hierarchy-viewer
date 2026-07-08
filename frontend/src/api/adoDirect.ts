@@ -18,16 +18,18 @@ import {
 
 import * as SDK from 'azure-devops-extension-sdk';
 
-import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode } from '../types';
+import type { WorkItemRelation, WorkItem, RelationType, QueryTreeNode, QueryColumn } from '../types';
 import type { HierarchyConfig } from '../types';
 import type { WorkItemTypeMeta } from '../state/workItemMetaStore';
-import { BATCH_SIZE, buildWiFields, DEFAULT_EFFORT_FIELD } from '../constants/fields';
+import { BATCH_SIZE, buildWiFields, DEFAULT_EFFORT_FIELD, KNOWN_FIELD_NAMES } from '../constants/fields';
 import { mapWithConcurrency } from '../utils/concurrency';
 import {
   renderClauseTree,
   isDoesNotContainMode,
   unionAndFilterMatches,
   normalizeQueryType,
+  extractQueryColumns,
+  extractExtraFields,
   type WorkItemQueryClause,
 } from '@ado-hierarchy-viewer/query-match-core';
 
@@ -236,6 +238,13 @@ async function fetchWorkItemsBatchDirect(
       const resolvedEffort = effortField ?? DEFAULT_EFFORT_FIELD;
       const effortRaw = f[resolvedEffort];
       const effort = typeof effortRaw === 'number' && Number.isFinite(effortRaw) ? effortRaw : null;
+
+      // Mirrors HierarchyService.fetchWorkItems (BFF): anything requested outside the
+      // fixed field set is a custom query column — surfaced raw for dynamic columns.
+      // Excludes resolvedEffort too: when it's also one of the query's own columns, its
+      // value is already shown via Progress/Time — no duplicate dynamic column.
+      const extraFields = extractExtraFields(fields, f, fn => KNOWN_FIELD_NAMES.has(fn), resolvedEffort);
+
       return {
         id: wi.id ?? 0,
         type: String(f['System.WorkItemType'] ?? ''),
@@ -253,6 +262,7 @@ async function fetchWorkItemsBatchDirect(
         originalEstimate: numOrNull(f, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
         completedWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.CompletedWork'),
         url: wi.url,
+        extraFields,
       };
     });
   });
@@ -365,6 +375,8 @@ export interface QueryRootsResult {
   queryRelations: WorkItemRelation[];
   /** True filter-match ids, independent of tree/oneHop scaffolding. Null when undeterminable. */
   matchedIds: number[] | null;
+  /** The query's own column set (order preserved) — mirrors BFF's QueryRootsResult.queryColumns. */
+  queryColumns: QueryColumn[];
 }
 
 export async function fetchQueryRootIdsDirect(
@@ -374,10 +386,12 @@ export async function fetchQueryRootIdsDirect(
   queryId: string,
   signal?: AbortSignal
 ): Promise<QueryRootsResult> {
-  if (signal?.aborted) return { rootIds: [], queryRelations: [], matchedIds: null };
+  if (signal?.aborted) return { rootIds: [], queryRelations: [], matchedIds: null, queryColumns: [] };
   try {
     const client = getClient(WorkItemTrackingRestClient);
     const result = await client.queryById(queryId, project);
+
+    const queryColumns: QueryColumn[] = extractQueryColumns(result.columns);
 
     let rootIds: number[] = [];
     let queryRelations: WorkItemRelation[] = [];
@@ -430,7 +444,7 @@ export async function fetchQueryRootIdsDirect(
       }
     }
 
-    return { rootIds, queryRelations, matchedIds };
+    return { rootIds, queryRelations, matchedIds, queryColumns };
   } catch (err) {
     return handleAdoError(err);
   }
@@ -482,22 +496,30 @@ export async function fetchHierarchyDirect(
   _orgUrl: string,
   _credential: string,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null; missingIdReasons: Record<number, 'restricted' | 'deleted' | 'missing'> }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null; missingIdReasons: Record<number, 'restricted' | 'deleted' | 'missing'>; queryColumns: QueryColumn[] }> {
   // The query is always the baseline — link types only extend outward from the work
   // items the query actually returned, they never seed the hierarchy on their own.
-  if (!config.queryId) return { workItemRelations: [], workItems: [], rootIds: [], matchedIds: null, missingIdReasons: {} };
+  if (!config.queryId) return { workItemRelations: [], workItems: [], rootIds: [], matchedIds: null, missingIdReasons: {}, queryColumns: [] };
   const q = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
   const rootIds = q.rootIds;
   const queryRelations = q.queryRelations;
   const matchedIds = q.matchedIds;
+  const queryColumns = q.queryColumns;
 
   // N4: abort checks between sequential awaits to skip unnecessary batch fetches after cancel
-  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null, missingIdReasons: {} };
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null, missingIdReasons: {}, queryColumns: [] };
 
   const effortField = config.effortField ?? DEFAULT_EFFORT_FIELD;
   const baseFields = buildWiFields(effortField);
   const completedWork = 'Microsoft.VSTS.Scheduling.CompletedWork';
-  const fields = baseFields.includes(completedWork) ? baseFields : [...baseFields, completedWork];
+  // Base fields (incl. all effort fields) are always fetched so Progress/Time can always be
+  // computed — the query's own columns are unioned in on top for dynamic columns (mirrors
+  // HierarchyController.ts on the BFF side).
+  const fields = [...new Set([
+    ...baseFields,
+    completedWork,
+    ...queryColumns.map(c => c.referenceName),
+  ])];
 
   // Seed = every node the query touched (roots + all relation endpoints).
   const seedIds = new Set<number>(rootIds);
@@ -567,7 +589,7 @@ export async function fetchHierarchyDirect(
     }
   }
 
-  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null, missingIdReasons: {} };
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null, missingIdReasons: {}, queryColumns };
 
   // Merge query-native edges with link-discovered edges — the query wins when both
   // describe the same source→target pair (it's the "actual query result").
@@ -597,5 +619,5 @@ export async function fetchHierarchyDirect(
     ? await classifyMissingIdsDirect(config.teamProject, stillMissingIds, signal)
     : {};
 
-  return { workItemRelations: relations, workItems, rootIds, matchedIds, missingIdReasons };
+  return { workItemRelations: relations, workItems, rootIds, matchedIds, missingIdReasons, queryColumns };
 }

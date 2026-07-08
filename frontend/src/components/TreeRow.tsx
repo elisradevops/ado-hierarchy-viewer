@@ -10,11 +10,17 @@ import LockIcon from '@mui/icons-material/Lock';
 import { StateChip } from './StateChip';
 import { ProgressBar, TimeProgressBar } from './ProgressBar';
 import { buildWorkItemUrl } from '../utils/adoUrlUtils';
-import { SEED_LINK_TYPES } from '../domain/adoLinkTypes';
+import {
+  relDisplayName, relChipLabel, relFamilyColor,
+  DISCOVERED_REL_COLOR, CUT_CYCLE_COLOR, MULTI_PARENT_COLOR, RESTRICTED_COLOR,
+} from '../domain/legendMeta';
 import { useHierarchyStore } from '../state/hierarchyStore';
+import { formatFieldValue } from '../utils/formatFieldValue';
+import { looksLikeHtml } from '../utils/htmlFieldText';
+import { HtmlFieldCell } from './HtmlFieldCell';
 import type { FlatRow } from '../types';
 import type { Density } from '../state/uiPrefsStore';
-import type { ColumnDef } from '../constants/columns';
+import { DYNAMIC_COL_PREFIX, type ColumnDef } from '../constants/columns';
 
 const INDENT_PX = 20;
 const INDENT_PX_NARROW = 12;
@@ -109,34 +115,7 @@ const TYPE_DOT_SX = {
 } as const;
 
 // ─── Link-rel chip helpers ──────────────────────────────────────────────────
-const SEED_DISPLAY_MAP: Record<string, string> = Object.fromEntries(
-  SEED_LINK_TYPES.map(lt => [lt.referenceName, lt.displayName])
-);
-
-const REL_FAMILY_COLORS: Record<string, string> = {
-  Hierarchy: '#1B458F',
-  Related:   '#6B7280',
-  Affects:   '#D97706',
-  TestedBy:  '#059669',
-  CoveredBy: '#7C3AED',
-};
-
-function relDisplayName(ref: string): string {
-  if (SEED_DISPLAY_MAP[ref]) return SEED_DISPLAY_MAP[ref];
-  const last = ref.split('.').pop() ?? ref;
-  return last.replace(/-Forward$|-Reverse$/, '');
-}
-
-// Chip label omits the " (Hierarchy)" suffix — every plain parent-child row would otherwise
-// repeat it; the full name (e.g. "Child (Hierarchy)") is still available via the chip's title tooltip.
-function relChipLabel(ref: string): string {
-  return relDisplayName(ref).replace(/\s*\(Hierarchy\)$/, '');
-}
-
-function relFamilyColor(ref: string): string {
-  const family = (ref.split('.').pop() ?? '').replace(/-Forward$|-Reverse$/, '');
-  return REL_FAMILY_COLORS[family] ?? '#6B7280';
-}
+// (colors + label helpers live in ../domain/legendMeta.ts — shared with LegendPopover)
 
 const REL_CHIP_SX = {
   display: 'inline-flex',
@@ -153,22 +132,6 @@ const REL_CHIP_SX = {
 } as const;
 
 const REL_CHIP_ICON_SX = { fontSize: '10px' } as const;
-
-// Amber tint for nodes reached only via the selected-link-type recursive expansion
-// (scaffolding beyond the source query's own results) — same chip, different color + icon.
-const DISCOVERED_REL_COLOR = '#B45309';
-
-// Distinct color for the cut-cycle indicator — a link the tree builder dropped to avoid
-// infinite recursion (it would loop back to an ancestor already on this branch).
-const CUT_CYCLE_COLOR = '#7C3AED';
-
-// Distinct color for the multi-parent indicator — this item is a directional-spine child
-// under 2+ distinct parents (diamond / likely mis-link), separate from a true cycle.
-const MULTI_PARENT_COLOR = '#DC2626';
-
-// Distinct color for a placeholder whose id never resolved because the current token has
-// no access to it (vs a deleted/unexplained placeholder) — see TreeNode.placeholderReason.
-const RESTRICTED_COLOR = '#B91C1C';
 
 const ID_SX = {
   fontSize: '0.68rem',
@@ -530,8 +493,25 @@ export const TreeRow = React.memo(function TreeRow({
               </Box>
             );
           }
-          default:
-            return null;
+          default: {
+            // Dynamic query column (see constants/columns.ts buildDynamicColumns) — key
+            // carries the ADO field reference name after the DYNAMIC_COL_PREFIX.
+            if (!col.key.startsWith(DYNAMIC_COL_PREFIX)) return null;
+            const refName = col.key.slice(DYNAMIC_COL_PREFIX.length);
+            const raw = node.extraFields?.[refName];
+            if (typeof raw === 'string' && looksLikeHtml(raw)) {
+              return (
+                <Box key={col.key} sx={cellSx}>
+                  <HtmlFieldCell label={col.label} rawValue={raw} />
+                </Box>
+              );
+            }
+            return (
+              <Box key={col.key} sx={cellSx}>
+                <Typography sx={raw != null ? TITLE_LEAF_SX : MUTED_SX} noWrap>{formatFieldValue(raw)}</Typography>
+              </Box>
+            );
+          }
         }
       })}
     </Box>

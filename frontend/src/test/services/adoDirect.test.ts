@@ -325,6 +325,28 @@ describe('fetchQueryRootIdsDirect', () => {
       { rel: 'System.LinkTypes.Related', source: { id: 1 }, target: { id: 2 }, origin: 'query' },
     ]);
   });
+
+  it('extracts the query\'s own columns (mirrors BFF QueryRootsResult.queryColumns)', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 1,
+      workItems: [{ id: 10 }],
+      columns: [
+        { referenceName: 'System.Title', name: 'Title' },
+        { referenceName: 'Custom.RiskLevel', name: 'Risk Level' },
+      ],
+    });
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+    expect(result.queryColumns).toEqual([
+      { referenceName: 'System.Title', name: 'Title' },
+      { referenceName: 'Custom.RiskLevel', name: 'Risk Level' },
+    ]);
+  });
+
+  it('returns an empty queryColumns array when the SDK result has none', async () => {
+    witStub.queryById.mockResolvedValue({ queryType: 1, workItems: [{ id: 10 }] });
+    const result = await fetchQueryRootIdsDirect('', '', 'Proj', 'query-guid');
+    expect(result.queryColumns).toEqual([]);
+  });
 });
 
 // ── fetchHierarchyDirect ───────────────────────────────────────────────────
@@ -376,6 +398,58 @@ describe('fetchHierarchyDirect', () => {
     await fetchHierarchyDirect(config, '', '');
     const batchCall = witStub.getWorkItemsBatch.mock.calls[0]?.[0] as { fields: string[] } | undefined;
     expect(batchCall?.fields).toContain('Microsoft.VSTS.Scheduling.CompletedWork');
+  });
+
+  it('unions the query\'s own columns into the requested fields and surfaces custom values via extraFields', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 1, // Flat
+      workItems: [{ id: 1 }],
+      columns: [{ referenceName: 'Custom.RiskLevel', name: 'Risk Level' }],
+    });
+    witStub.getWorkItemsBatch.mockResolvedValue([
+      {
+        id: 1,
+        fields: {
+          'System.WorkItemType': 'Task', 'System.Title': 'T1', 'System.State': 'Active', 'System.TeamProject': 'Proj',
+          'Custom.RiskLevel': 'High',
+        },
+      },
+    ]);
+    const config = {
+      teamProject: 'Proj', relationTypes: [], queryId: 'q-guid',
+      effortField: '', closedState: 'Closed', topLevelType: '',
+    };
+    const result = await fetchHierarchyDirect(config, '', '');
+
+    const batchCall = witStub.getWorkItemsBatch.mock.calls[0]?.[0] as { fields: string[] } | undefined;
+    expect(batchCall?.fields).toContain('Custom.RiskLevel');
+    expect(result.queryColumns).toEqual([{ referenceName: 'Custom.RiskLevel', name: 'Risk Level' }]);
+    expect(result.workItems[0].extraFields).toEqual({ 'Custom.RiskLevel': 'High' });
+  });
+
+  it('excludes the configured effort field from extraFields even when it is also one of the query\'s own columns', async () => {
+    witStub.queryById.mockResolvedValue({
+      queryType: 1,
+      workItems: [{ id: 1 }],
+      columns: [{ referenceName: 'Custom.Effort', name: 'Effort' }],
+    });
+    witStub.getWorkItemsBatch.mockResolvedValue([
+      {
+        id: 1,
+        fields: {
+          'System.WorkItemType': 'Task', 'System.Title': 'T1', 'System.State': 'Active', 'System.TeamProject': 'Proj',
+          'Custom.Effort': 5,
+        },
+      },
+    ]);
+    const config = {
+      teamProject: 'Proj', relationTypes: [], queryId: 'q-guid',
+      effortField: 'Custom.Effort', closedState: 'Closed', topLevelType: '',
+    };
+    const result = await fetchHierarchyDirect(config, '', '');
+
+    expect(result.workItems[0].effort).toBe(5);
+    expect(result.workItems[0].extraFields).toBeUndefined();
   });
 
   it('merges query-native edges with link edges, query wins on the same pair', async () => {

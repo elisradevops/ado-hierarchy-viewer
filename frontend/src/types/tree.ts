@@ -60,6 +60,9 @@ export interface TreeNode {
    *  directional-spine edges — a diamond / multi-parent link, not a cycle (see
    *  graphBuilder.findMultiParents). Undefined when this node has a single spine parent. */
   multiParents?: number[];
+  /** Raw values for the baseline query's custom (non-fixed) fields — see WorkItem.extraFields.
+   *  Passed through unchanged from the source WorkItem; undefined on placeholder/synthetic nodes. */
+  extraFields?: Record<string, unknown>;
 }
 
 export interface FlatRow {

@@ -175,3 +175,41 @@ export function unionAndFilterMatches(
   const union = new Set<number>([...(sourceIds ?? []), ...(targetIds ?? [])]);
   return [...union].filter(id => presentIds.has(id));
 }
+
+/**
+ * Extracts a query's own declared column set from either transport's raw response shape
+ * (BFF: `_apis/wit/wiql/{id}` REST JSON; extension: SDK's `WorkItemQueryResult.columns`).
+ * Both shapes are `Array<{referenceName?, name?}>` — filters out any entry missing either,
+ * so callers get a clean `WorkItemFieldReference[]` regardless of transport.
+ */
+export function extractQueryColumns(
+  raw: Array<{ referenceName?: string; name?: string }> | undefined
+): WorkItemFieldReference[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c): c is { referenceName: string; name: string } => !!c.referenceName && !!c.name)
+    .map(c => ({ referenceName: c.referenceName, name: c.name }));
+}
+
+/**
+ * Collects any requested field outside the caller's own "known/fixed" set into a raw
+ * extraFields bag — powers dynamic query columns (see constants/columns.ts
+ * buildDynamicColumns on the frontend). `isKnown` and `effortField` are passed in rather
+ * than hardcoded here because the BFF and frontend each maintain their own known-field set
+ * and effort-field resolution, which aren't identical.
+ */
+export function extractExtraFields(
+  fields: string[],
+  rawFields: Record<string, unknown>,
+  isKnown: (fieldName: string) => boolean,
+  effortField?: string | null
+): Record<string, unknown> | undefined {
+  let extraFields: Record<string, unknown> | undefined;
+  for (const fieldName of fields) {
+    if (isKnown(fieldName)) continue;
+    if (fieldName === effortField) continue;
+    if (!(fieldName in rawFields)) continue;
+    (extraFields ??= {})[fieldName] = rawFields[fieldName];
+  }
+  return extraFields;
+}

@@ -81,7 +81,8 @@ export function WelcomeState(): React.ReactElement {
       <Box sx={STEP_ROW_SX}>
         {[
           'Select a Team Project in the sidebar',
-          'Choose a Link Type (e.g. Child / Hierarchy)',
+          'Pick a Source Query — required, it\'s the tree\'s baseline',
+          'Add Link Types to extend the tree further (optional)',
           'Click Load Hierarchy',
         ].map((step, i) => (
           <Box key={i} sx={STEP_SX}>

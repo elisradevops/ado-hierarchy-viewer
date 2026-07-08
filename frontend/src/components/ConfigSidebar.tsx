@@ -18,12 +18,14 @@ import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { fetchRelationTypes, fetchProjects, fetchWorkItemTypeMeta } from '../api/hierarchyApi';
 import { fetchRelationTypesDirect, fetchProjectsDirect, fetchWorkItemTypeMetaDirect } from '../api/adoDirect';
 import { QuerySelector } from './QuerySelector';
+import { InfoTip } from './InfoTip';
 
 import { computeSummaryStats } from '../selectors/summaryStats';
 import { HierarchySummary } from './HierarchySummary';
 import { deriveOrgName } from '../utils/adoUrlUtils';
 import { storage } from '../utils/storage';
 import { useWorkItemMetaStore } from '../state/workItemMetaStore';
+import { HELP } from '../constants/helpText';
 import type { AuthCtx } from '../types';
 
 // ─── Layout constants ───────────────────────────────────────────
@@ -145,6 +147,16 @@ const ORG_NAME_SX = {
   flexGrow: 1,
   fontSize: '0.78rem',
   color: 'text.secondary',
+} as const;
+
+// Helper-text row: caption + InfoTip on one line, gap pushes the icon to the end.
+// Kept out of the field's endAdornment slot — that slot is absolutely positioned by
+// MUI (Autocomplete especially) and breaks when multi-line chips or extra children push it.
+const HELPER_ROW_SX = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 0.5,
 } as const;
 
 const COLLAPSED_ICON_AREA_SX = {
@@ -336,7 +348,12 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
                 {...params}
                 label="Team Project"
                 required
-                helperText={mode === 'extension' ? 'Auto-selected from ADO context' : 'Select or type your ADO team project'}
+                helperText={
+                  <Box component="span" sx={HELPER_ROW_SX}>
+                    <span>{mode === 'extension' ? 'Auto-selected from ADO context' : 'Select or type your ADO team project'}</span>
+                    <InfoTip title="Team Project" text={HELP.teamProject} ariaLabel="About Team Project" />
+                  </Box>
+                }
                 InputProps={{
                   ...params.InputProps,
                   endAdornment: (
@@ -371,7 +388,12 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               },
             }}
             placeholder="Click to browse or paste a query ID…"
-            helperText={config.queryId ? 'Seeds the hierarchy from saved query results.' : 'Required: the query is the baseline of the hierarchy.'}
+            helperText={
+              <Box component="span" sx={HELPER_ROW_SX}>
+                <span>{config.queryId ? 'Seeds the hierarchy from saved query results.' : 'Required: the query is the baseline of the hierarchy.'}</span>
+                <InfoTip title="Source Query" text={HELP.sourceQuery} ariaLabel="About Source Query" />
+              </Box>
+            }
             size="small"
             onClick={() => { if (config.teamProject) setQuerySelectorOpen(true); }}
             sx={{ cursor: config.teamProject ? 'pointer' : 'default' }}
@@ -418,7 +440,12 @@ export function ConfigSidebar({ onRun }: ConfigSidebarProps): React.ReactElement
               <TextField
                 {...params}
                 label="Link Types"
-                helperText="Optional: extend the query's tree by following these link types outward."
+                helperText={
+                  <Box component="span" sx={HELPER_ROW_SX}>
+                    <span>Optional: extend the query&rsquo;s tree by following these link types outward.</span>
+                    <InfoTip title="Link Types" text={HELP.linkTypes} ariaLabel="About Link Types" />
+                  </Box>
+                }
               />
             )}
           />

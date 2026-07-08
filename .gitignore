@@ -9,3 +9,4 @@ coverage
 *.tsbuildinfo
 .playwright-mcp/
 .DS_Store
+docs/superpowers

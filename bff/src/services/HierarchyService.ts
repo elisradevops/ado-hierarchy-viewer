@@ -6,7 +6,7 @@ import { withSingleFlight } from '../utils/singleFlight';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { deriveMatchedIds, type QueryDefinition } from './queryMatchDerivation';
-import { normalizeQueryType } from '@ado-hierarchy-viewer/query-match-core';
+import { normalizeQueryType, extractQueryColumns, extractExtraFields } from '@ado-hierarchy-viewer/query-match-core';
 
 // ADO on-prem api-version fallback chain
 const API_VERSIONS = ['7.1', '5.1', ''] as const;
@@ -56,6 +56,16 @@ export interface WorkItem {
   originalEstimate?: number | null;
   completedWork?: number | null;
   url?: string;
+  /** Raw values for fields the baseline query declared that aren't one of the fixed
+   *  properties above — keyed by ADO field reference name. Populated by fetchWorkItems
+   *  when `fields` includes a reference name outside its knownFields set. */
+  extraFields?: Record<string, unknown>;
+}
+
+/** One column the baseline ADO query itself declares (WIQL response `columns`). */
+export interface QueryColumn {
+  referenceName: string;
+  name: string;
 }
 
 export interface QueryRootsResult {
@@ -68,6 +78,9 @@ export interface QueryRootsResult {
    * queryMatchDerivation.ts) — strict-mode highlighting is simply unavailable then.
    */
   matchedIds: number[] | null;
+  /** The query's own column set (order preserved) — drives dynamic columns in the frontend.
+   *  Empty when the WIQL response carried no columns (older on-prem ADO). */
+  queryColumns: QueryColumn[];
 }
 
 async function fetchQueryDefinition(
@@ -119,8 +132,11 @@ export async function fetchQueryRootIds(
         queryType: string;
         workItems?: Array<{ id: number }>;
         workItemRelations?: Array<{ rel?: string | null; source: { id: number } | null; target: { id: number } | null }>;
+        columns?: Array<{ referenceName?: string; name?: string }>;
       }>(url, apiVersion || undefined);
     });
+
+    const queryColumns: QueryColumn[] = extractQueryColumns(result.columns);
 
     let rootIds: number[] = [];
     let queryRelations: WorkItemRelation[] = [];
@@ -170,7 +186,7 @@ export async function fetchQueryRootIds(
       matchedIds = queryDef ? await deriveMatchedIds(client, orgUrl, project, queryDef, presentIds) : null;
     }
 
-    const out: QueryRootsResult = { rootIds, queryRelations, matchedIds };
+    const out: QueryRootsResult = { rootIds, queryRelations, matchedIds, queryColumns };
     cacheSet(key, out);
     return out;
   });
@@ -325,16 +341,28 @@ export async function fetchWorkItems(
 
     // Resolve which field carries effort:
     // 1. Use explicit effortField param if provided.
-    // 2. Fall back to first field in `fields` not in knownFields (custom effort field).
+    // 2. Fall back to the sole field in `fields` outside knownFields (custom effort field) —
+    //    only when there's exactly one such field. `fields` can now carry many non-fixed
+    //    entries (the baseline query's own custom columns get unioned in by the caller), so
+    //    guessing "the first one" among several would be as likely wrong as right — bail to
+    //    null instead of picking arbitrarily.
     // 3. If effortField is a known base field (e.g. OriginalEstimate), read it directly.
+    const nonKnownFields = fields.filter(fn => !knownFields.has(fn));
     const resolvedEffortField = effortField
-      ?? fields.find(fn => !knownFields.has(fn))
-      ?? null;
+      ?? (nonKnownFields.length === 1 ? nonKnownFields[0] : null);
 
     const allItems: WorkItem[] = batchResults.flat().map(raw => {
       const f = raw.fields;
       const effortRaw = resolvedEffortField != null ? f[resolvedEffortField] : undefined;
       const effort = typeof effortRaw === 'number' && Number.isFinite(effortRaw) ? effortRaw : null;
+
+      // Any requested field outside the fixed set (e.g. the baseline query's own custom
+      // columns) is surfaced raw here for the frontend's dynamic-column renderer — see
+      // constants/columns.ts buildDynamicColumns / types/ado.ts WorkItem.extraFields.
+      // Excludes resolvedEffortField too: when it's also one of the query's own columns,
+      // its value is already shown via Progress/Time — a duplicate dynamic column would
+      // otherwise render the same number twice.
+      const extraFields = extractExtraFields(fields, f, fn => knownFields.has(fn), resolvedEffortField);
 
       return {
         id: raw.id,
@@ -353,6 +381,7 @@ export async function fetchWorkItems(
         originalEstimate: numOrNull(f, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
         completedWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.CompletedWork'),
         url: raw.url,
+        extraFields,
       };
     });
 

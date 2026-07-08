@@ -278,6 +278,53 @@ describe('fetchWorkItems', () => {
     expect(result[0].effort).toBeNull();
   });
 
+  it('excludes the resolved effort field from extraFields even when it is also a requested custom column', async () => {
+    const client = makeClient();
+    (client.post as jest.Mock).mockResolvedValueOnce({
+      value: [
+        {
+          id: 1,
+          fields: {
+            'System.WorkItemType': 'Task', 'System.Title': 'T', 'System.State': 'Active', 'System.TeamProject': 'P',
+            'Custom.RiskLevel': 5,
+          },
+        },
+      ],
+    });
+
+    const result = await fetchWorkItems(
+      client, 'https://ado.example.com', 'P', [1],
+      ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.TeamProject', 'Custom.RiskLevel'],
+      'Custom.RiskLevel'
+    );
+
+    expect(result[0].effort).toBe(5);
+    expect(result[0].extraFields).toBeUndefined();
+  });
+
+  it('resolves effort to null (does not guess) when multiple non-known fields are requested and effortField is omitted', async () => {
+    const client = makeClient();
+    (client.post as jest.Mock).mockResolvedValueOnce({
+      value: [
+        {
+          id: 1,
+          fields: {
+            'System.WorkItemType': 'Task', 'System.Title': 'T', 'System.State': 'Active', 'System.TeamProject': 'P',
+            'Custom.A': 1, 'Custom.B': 2,
+          },
+        },
+      ],
+    });
+
+    const result = await fetchWorkItems(
+      client, 'https://ado.example.com', 'P', [1],
+      ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.TeamProject', 'Custom.A', 'Custom.B']
+    );
+
+    expect(result[0].effort).toBeNull();
+    expect(result[0].extraFields).toEqual({ 'Custom.A': 1, 'Custom.B': 2 });
+  });
+
   it('returns cached value without calling AdoClient.post', async () => {
     const client = makeClient();
     const cached = [{ id: 1, type: 'Task', title: 'T', state: 'Active', teamProject: 'P', effort: null }];
