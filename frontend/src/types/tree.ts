@@ -33,6 +33,8 @@ export interface TreeNode {
   remainingWork?: number | null;
   originalEstimate?: number | null;
   completedWork?: number | null;
+  /** Set only on synthetic placeholder nodes (linked id never resolved) — why, per treeBuilder.makePlaceholder. */
+  placeholderReason?: 'restricted' | 'deleted' | 'missing';
   completedWorkTotal: number;
   remainingWorkTotal: number;
   originalEstimateTotal: number;
@@ -49,10 +51,15 @@ export interface TreeNode {
   linkOrigin?: 'query' | 'link';
   /** True filter-match per the source query's own clauses (not ADO's ancestor/sibling scaffolding). Undefined when no query is active or matches are undeterminable. */
   isQueryMatch?: boolean;
-  /** Ids of ancestors that a link on this node would have cycled back to — dropped during
-   *  tree build to prevent infinite recursion (see treeBuilder.ts). Undefined/empty when
-   *  this node cut no cyclic edges. */
-  cutCycles?: number[];
+  /** Genuine directional-spine cycles cut on this node — dropped during tree build to
+   *  prevent infinite recursion (see treeBuilder.ts). Reciprocal (isRef) and symmetric
+   *  (e.g. Related) back-edges are NOT recorded here — they're expected duplicate views
+   *  of the same relationship, not cycles. Undefined/empty when this node cut no cycles. */
+  cutCycles?: Array<{ target: number; via: string; path: number[] }>;
+  /** Ids of ADO work items that are the direct parent of this node's id via 2+ distinct
+   *  directional-spine edges — a diamond / multi-parent link, not a cycle (see
+   *  graphBuilder.findMultiParents). Undefined when this node has a single spine parent. */
+  multiParents?: number[];
 }
 
 export interface FlatRow {
@@ -71,6 +78,8 @@ export interface BuildHierarchyInput {
   selectedRels?: string[];
   /** True filter-match ids from the source query. Null/undefined = no query or undeterminable. */
   matchedIds?: number[] | null;
+  /** Why linked ids that never resolved to a work item are missing (no access vs deleted). */
+  missingIdReasons?: Record<number, 'restricted' | 'deleted' | 'missing'>;
 }
 
 export interface BuildHierarchyResult {

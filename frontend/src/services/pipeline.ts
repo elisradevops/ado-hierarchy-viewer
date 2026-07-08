@@ -1,5 +1,5 @@
 import type { BuildHierarchyInput, BuildHierarchyResult, TreeNode, WorkItem } from '../types';
-import { buildAdjacency } from './graphBuilder';
+import { buildAdjacency, findMultiParents } from './graphBuilder';
 import { findRoots } from './rootDetector';
 import { buildTree } from './treeBuilder';
 
@@ -13,9 +13,10 @@ export function buildHierarchy(input: BuildHierarchyInput): BuildHierarchyResult
   const adjacency = buildAdjacency(relations, input.selectedRels);
   const rootIds = input.rootIds ?? findRoots(adjacency);
   const matchedIdSet = input.matchedIds ? new Set(input.matchedIds) : undefined;
+  const multiParents = findMultiParents(adjacency);
 
   const roots = rootIds
-    .map(id => buildTree(id, adjacency, itemsById, closedState, new Set(), matchedIdSet))
+    .map(id => buildTree(id, adjacency, itemsById, closedState, new Set(), matchedIdSet, multiParents, input.missingIdReasons))
     .filter((node): node is TreeNode => node !== null);
 
   // Collect all reachable ids (from tree traversal)

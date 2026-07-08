@@ -223,16 +223,26 @@ describe('TreeRow — indent cap', () => {
 
 describe('TreeRow — cut-cycle indicator', () => {
   it('renders a cycle icon + tooltip when cutCycles is present', () => {
-    const { container } = renderRow(makeRow({ cutCycles: [1] }));
+    const { container } = renderRow(makeRow({
+      cutCycles: [{ target: 1, via: 'System.LinkTypes.Hierarchy-Forward', path: [1, 2, 1] }],
+    }));
     expect(container.querySelector('[data-testid="LoopIcon"]')).toBeInTheDocument();
     const chip = container.querySelector('[data-testid="LoopIcon"]')?.closest('span');
-    expect(chip).toHaveAttribute('title', 'Cyclic link to #1 not shown (would loop back)');
+    expect(chip).toHaveAttribute('title', 'Cycle via Child (Hierarchy): #1 → #2 → #1');
   });
 
-  it('pluralizes the tooltip when multiple cycles were cut', () => {
-    const { container } = renderRow(makeRow({ cutCycles: [1, 5] }));
+  it('lists multiple cut cycles on separate lines in the tooltip', () => {
+    const { container } = renderRow(makeRow({
+      cutCycles: [
+        { target: 1, via: 'System.LinkTypes.Hierarchy-Forward', path: [1, 2, 1] },
+        { target: 5, via: 'System.LinkTypes.Hierarchy-Forward', path: [5, 6, 5] },
+      ],
+    }));
     const chip = container.querySelector('[data-testid="LoopIcon"]')?.closest('span');
-    expect(chip).toHaveAttribute('title', 'Cyclic links to #1, #5 not shown (would loop back)');
+    expect(chip).toHaveAttribute(
+      'title',
+      'Cycle via Child (Hierarchy): #1 → #2 → #1\nCycle via Child (Hierarchy): #5 → #6 → #5'
+    );
   });
 
   it('renders no cycle icon when cutCycles is absent', () => {

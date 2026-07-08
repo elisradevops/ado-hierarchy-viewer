@@ -1,4 +1,4 @@
-import { fetchLinks, fetchWorkItems, fetchQueryRootIds } from '../services/HierarchyService';
+import { fetchLinks, fetchWorkItems, fetchQueryRootIds, classifyMissingIds } from '../services/HierarchyService';
 import { AdoClient } from '../services/AdoClient';
 import * as cache from '../services/cache';
 
@@ -51,6 +51,41 @@ describe('fetchLinks', () => {
 
     expect(result).toBe(cached);
     expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it('bypassCache=true skips the cache and hits AdoClient.post even when a cached value exists', async () => {
+    // Regression test: the Refresh button (postHierarchy) must see a just-deleted item
+    // disappear from ADO's link results immediately, not only after the cache's TTL
+    // naturally expires — bypassCache is how it forces a real network round-trip.
+    const client = makeClient();
+    const cached = [{ rel: 'X', source: { id: 1 }, target: { id: 2 } }];
+    mockedCacheGet.mockReturnValue(cached);
+    const fresh = [{ rel: 'X', source: { id: 1 }, target: { id: 3 } }];
+    (client.post as jest.Mock).mockResolvedValueOnce({ workItemRelations: fresh });
+
+    const result = await fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X'], undefined, true);
+
+    expect(result).toEqual(fresh);
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces two concurrent bypassCache calls with identical params into one AdoClient.post call', async () => {
+    // Optimization: bypassCache correctly forces freshness, but without coalescing, two
+    // near-simultaneous refreshes (e.g. two browser tabs) would each fire a full ADO
+    // round-trip. Single-flight collapses them into one call — both still get the fresh result.
+    const client = makeClient();
+    mockedCacheGet.mockReturnValue(undefined);
+    const fresh = [{ rel: 'X', source: { id: 1 }, target: { id: 2 } }];
+    (client.post as jest.Mock).mockResolvedValueOnce({ workItemRelations: fresh });
+
+    const [a, b] = await Promise.all([
+      fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X'], undefined, true),
+      fetchLinks(client, 'https://ado.example.com', 'MyProject', ['X'], undefined, true),
+    ]);
+
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(fresh);
+    expect(b).toEqual(fresh);
   });
 
   it('stores result in cache after a successful fetch', async () => {
@@ -252,6 +287,35 @@ describe('fetchWorkItems', () => {
 
     expect(result).toBe(cached);
     expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it('bypassCache=true skips the cache and hits AdoClient.post even when a cached value exists', async () => {
+    const client = makeClient();
+    const cached = [{ id: 1, type: 'Task', title: 'Stale (pre-delete)', state: 'Active', teamProject: 'P', effort: null }];
+    mockedCacheGet.mockReturnValue(cached);
+    (client.post as jest.Mock).mockResolvedValueOnce({ value: [] }); // item 1 deleted — omitted from batch response
+
+    const result = await fetchWorkItems(client, 'https://ado.example.com', 'Proj', [1], ['System.Id'], undefined, true);
+
+    expect(result).toEqual([]);
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces two concurrent bypassCache calls with identical params into one AdoClient.post call', async () => {
+    const client = makeClient();
+    mockedCacheGet.mockReturnValue(undefined);
+    (client.post as jest.Mock).mockResolvedValueOnce({
+      value: [{ id: 1, fields: { 'System.Id': 1, 'System.Title': 'Fresh' } }],
+    });
+
+    const [a, b] = await Promise.all([
+      fetchWorkItems(client, 'https://ado.example.com', 'Proj', [1], ['System.Id'], undefined, true),
+      fetchWorkItems(client, 'https://ado.example.com', 'Proj', [1], ['System.Id'], undefined, true),
+    ]);
+
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+    expect(a[0]).toMatchObject({ id: 1, title: 'Fresh' });
   });
 
   it('chunks ids correctly — sends 2 requests for 201 ids with batch size 200', async () => {
@@ -484,5 +548,113 @@ describe('fetchQueryRootIds', () => {
 
     expect(result).toBe(cached);
     expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it('bypassCache=true skips the cache and hits AdoClient.get even when a cached value exists', async () => {
+    const client = makeClient();
+    const cached = { rootIds: [5, 6], queryRelations: [], matchedIds: null };
+    mockedCacheGet.mockReturnValue(cached);
+    (client.get as jest.Mock).mockResolvedValueOnce({ queryType: 'Flat', workItems: [{ id: 5 }] }); // 6 was deleted
+
+    const result = await fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'cached-query', true);
+
+    expect(result.rootIds).toEqual([5]);
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces two concurrent bypassCache calls with identical params into one AdoClient.get call', async () => {
+    const client = makeClient();
+    mockedCacheGet.mockReturnValue(undefined);
+    (client.get as jest.Mock).mockResolvedValueOnce({ queryType: 'Flat', workItems: [{ id: 5 }] });
+
+    const [a, b] = await Promise.all([
+      fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'q-1', true),
+      fetchQueryRootIds(client, 'https://ado.example.com', 'Proj', 'q-1', true),
+    ]);
+
+    expect(client.get).toHaveBeenCalledTimes(1);
+    expect(a.rootIds).toEqual([5]);
+    expect(b.rootIds).toEqual([5]);
+  });
+});
+
+// ─── classifyMissingIds ──────────────────────────────────────────────────────
+
+// Extracts the trailing work item id from the probe URL so a single mockImplementation
+// can answer differently per id — needed because withApiVersionFallback retries 400/404/405
+// across API_VERSIONS (3 calls per id), so a plain mockRejectedValueOnce would only cover
+// the first attempt and the retry would spuriously "succeed" against jest's default mock.
+function idFromProbeUrl(url: string): number {
+  return Number(url.split('/').pop()?.split('?')[0]);
+}
+
+describe('classifyMissingIds', () => {
+  it('returns an empty map for an empty id list without calling AdoClient', async () => {
+    const client = makeClient();
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', []);
+    expect(result.size).toBe(0);
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it('classifies a 403 response as restricted (single attempt, no version retry)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockRejectedValue({ response: { status: 403 } });
+
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', [1]);
+
+    expect(result.get(1)).toBe('restricted');
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies a 401 response as restricted (single attempt, no version retry)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockRejectedValue({ response: { status: 401 } });
+
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', [1]);
+
+    expect(result.get(1)).toBe('restricted');
+    expect(client.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies a 404 response as deleted (persists across api-version fallback retries)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockRejectedValue({ response: { status: 404 } });
+
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', [2]);
+
+    expect(result.get(2)).toBe('deleted');
+  });
+
+  it('classifies an unexpected error status as missing', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', [3]);
+
+    expect(result.get(3)).toBe('missing');
+  });
+
+  it('classifies an id that resolves in isolation as missing (transient batch omission)', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockResolvedValue({ id: 4 });
+
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', [4]);
+
+    expect(result.get(4)).toBe('missing');
+  });
+
+  it('classifies multiple ids independently by url', async () => {
+    const client = makeClient();
+    (client.get as jest.Mock).mockImplementation((url: string) => {
+      const id = idFromProbeUrl(url);
+      if (id === 1) return Promise.reject({ response: { status: 403 } });
+      if (id === 2) return Promise.reject({ response: { status: 404 } });
+      return Promise.resolve({ id });
+    });
+
+    const result = await classifyMissingIds(client, 'https://ado.example.com', 'Proj', [1, 2]);
+
+    expect(result.get(1)).toBe('restricted');
+    expect(result.get(2)).toBe('deleted');
   });
 });

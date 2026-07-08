@@ -42,7 +42,7 @@ export function useHierarchyData(): {
     void (async () => {
       try {
         // Fetch raw ADO data — direct in extension mode, via BFF in standalone
-        const { workItemRelations, workItems, rootIds, matchedIds } = mode === 'extension'
+        const { workItemRelations, workItems, rootIds, matchedIds, missingIdReasons } = mode === 'extension'
           ? await fetchHierarchyDirect(config, orgUrl, credential, signal)
           : await fetchHierarchy(config, ctx, signal);
 
@@ -63,6 +63,7 @@ export function useHierarchyData(): {
             rootIds,
             selectedRels: config.relationTypes,
             matchedIds,
+            missingIdReasons,
           },
           signal
         );

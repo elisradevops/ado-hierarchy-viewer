@@ -130,17 +130,21 @@ export async function fetchQueries(
   return response.data ?? [];
 }
 
+/** Why a linked id never resolved to a work item — surfaced instead of a generic "missing" placeholder. */
+export type MissingIdReason = 'restricted' | 'deleted' | 'missing';
+
 export async function fetchHierarchy(
   config: HierarchyConfig,
   ctx: AuthCtx,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null; missingIdReasons: Record<number, MissingIdReason> }> {
   const response = await withRetry(() =>
     httpClient.post<{
       workItemRelations: WorkItemRelation[];
       workItems: WorkItem[];
       rootIds?: number[];
       matchedIds: number[] | null;
+      missingIdReasons?: Record<number, MissingIdReason>;
     }>(
       '/hierarchy',
       {
@@ -158,5 +162,7 @@ export async function fetchHierarchy(
     MAX_RETRIES,
     signal
   );
-  return response.data ?? { workItemRelations: [], workItems: [], matchedIds: null };
+  return response.data
+    ? { ...response.data, missingIdReasons: response.data.missingIdReasons ?? {} }
+    : { workItemRelations: [], workItems: [], matchedIds: null, missingIdReasons: {} };
 }

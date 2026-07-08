@@ -2,6 +2,7 @@ import { AdoClient } from './AdoClient';
 import { cacheGet, cacheSet } from './cache';
 import { cacheKey, cacheKeyFromParts } from '../utils/hash';
 import { adoConcurrencyLimit } from '../utils/queue';
+import { withSingleFlight } from '../utils/singleFlight';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { deriveMatchedIds, type QueryDefinition } from './queryMatchDerivation';
@@ -100,74 +101,79 @@ export async function fetchQueryRootIds(
   client: AdoClient,
   orgUrl: string,
   project: string,
-  queryId: string
+  queryId: string,
+  bypassCache = false
 ): Promise<QueryRootsResult> {
   const key = cacheKey(orgUrl, project, 'query', queryId);
-  const cached = cacheGet<QueryRootsResult>(key);
-  if (cached) return cached;
+  if (!bypassCache) {
+    const cached = cacheGet<QueryRootsResult>(key);
+    if (cached) return cached;
+  }
 
-  const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
-  const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/wiql/${encodeURIComponent(queryId)}`;
+  return withSingleFlight(key, async () => {
+    const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
+    const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/wiql/${encodeURIComponent(queryId)}`;
 
-  const result = await withApiVersionFallback(async (apiVersion) => {
-    return client.get<{
-      queryType: string;
-      workItems?: Array<{ id: number }>;
-      workItemRelations?: Array<{ rel?: string | null; source: { id: number } | null; target: { id: number } | null }>;
-    }>(url, apiVersion || undefined);
-  });
+    const result = await withApiVersionFallback(async (apiVersion) => {
+      return client.get<{
+        queryType: string;
+        workItems?: Array<{ id: number }>;
+        workItemRelations?: Array<{ rel?: string | null; source: { id: number } | null; target: { id: number } | null }>;
+      }>(url, apiVersion || undefined);
+    });
 
-  let rootIds: number[] = [];
-  let queryRelations: WorkItemRelation[] = [];
-  // Normalized against the same shared logic the extension-mode twin uses (which compares
-  // the SDK's numeric QueryType enum instead of a raw string) — removes the drift risk of
-  // two independent queryType comparisons silently diverging.
-  const queryType = normalizeQueryType(result.queryType);
+    let rootIds: number[] = [];
+    let queryRelations: WorkItemRelation[] = [];
+    // Normalized against the same shared logic the extension-mode twin uses (which compares
+    // the SDK's numeric QueryType enum instead of a raw string) — removes the drift risk of
+    // two independent queryType comparisons silently diverging.
+    const queryType = normalizeQueryType(result.queryType);
 
-  if (queryType === 'flat' && Array.isArray(result.workItems)) {
-    rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
-  } else if (queryType === 'tree' && Array.isArray(result.workItemRelations)) {
-    queryRelations = result.workItemRelations
-      .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
-      .map(r => ({ rel: r.rel ?? null, source: r.source, target: r.target, origin: 'query' as const }));
-    const childIds = new Set(queryRelations.map(r => r.target!.id));
-    const seen = new Set<number>();
-    rootIds = queryRelations
-      .filter(r => !childIds.has(r.source!.id))
-      .map(r => r.source!.id)
-      .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
-  } else if (queryType === 'oneHop' && Array.isArray(result.workItemRelations)) {
-    // "Direct Links" queries: top-level items are marked by a null-source entry
-    // { source: null, target: {id} }; actual one-hop links have both source and target.
-    const seen = new Set<number>();
-    for (const r of result.workItemRelations) {
-      if (!r.source && r.target && Number.isInteger(r.target.id) && !seen.has(r.target.id)) {
-        seen.add(r.target.id);
-        rootIds.push(r.target.id);
+    if (queryType === 'flat' && Array.isArray(result.workItems)) {
+      rootIds = result.workItems.map(wi => wi.id).filter(Number.isInteger);
+    } else if (queryType === 'tree' && Array.isArray(result.workItemRelations)) {
+      queryRelations = result.workItemRelations
+        .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+        .map(r => ({ rel: r.rel ?? null, source: r.source, target: r.target, origin: 'query' as const }));
+      const childIds = new Set(queryRelations.map(r => r.target!.id));
+      const seen = new Set<number>();
+      rootIds = queryRelations
+        .filter(r => !childIds.has(r.source!.id))
+        .map(r => r.source!.id)
+        .filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
+    } else if (queryType === 'oneHop' && Array.isArray(result.workItemRelations)) {
+      // "Direct Links" queries: top-level items are marked by a null-source entry
+      // { source: null, target: {id} }; actual one-hop links have both source and target.
+      const seen = new Set<number>();
+      for (const r of result.workItemRelations) {
+        if (!r.source && r.target && Number.isInteger(r.target.id) && !seen.has(r.target.id)) {
+          seen.add(r.target.id);
+          rootIds.push(r.target.id);
+        }
       }
+      queryRelations = result.workItemRelations
+        .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
+        .map(r => ({ rel: r.rel ?? null, source: r.source, target: r.target, origin: 'query' as const }));
     }
-    queryRelations = result.workItemRelations
-      .filter(r => r.source && r.target && Number.isInteger(r.source.id) && Number.isInteger(r.target.id))
-      .map(r => ({ rel: r.rel ?? null, source: r.source, target: r.target, origin: 'query' as const }));
-  }
 
-  let matchedIds: number[] | null;
-  if (queryType === 'flat') {
-    // Flat queries return no scaffolding — every returned id is already an exact match.
-    matchedIds = rootIds;
-  } else {
-    const presentIds = new Set<number>(rootIds);
-    for (const r of queryRelations) {
-      presentIds.add(r.source!.id);
-      presentIds.add(r.target!.id);
+    let matchedIds: number[] | null;
+    if (queryType === 'flat') {
+      // Flat queries return no scaffolding — every returned id is already an exact match.
+      matchedIds = rootIds;
+    } else {
+      const presentIds = new Set<number>(rootIds);
+      for (const r of queryRelations) {
+        presentIds.add(r.source!.id);
+        presentIds.add(r.target!.id);
+      }
+      const queryDef = await fetchQueryDefinition(client, orgUrl, project, queryId);
+      matchedIds = queryDef ? await deriveMatchedIds(client, orgUrl, project, queryDef, presentIds) : null;
     }
-    const queryDef = await fetchQueryDefinition(client, orgUrl, project, queryId);
-    matchedIds = queryDef ? await deriveMatchedIds(client, orgUrl, project, queryDef, presentIds) : null;
-  }
 
-  const out: QueryRootsResult = { rootIds, queryRelations, matchedIds };
-  cacheSet(key, out);
-  return out;
+    const out: QueryRootsResult = { rootIds, queryRelations, matchedIds };
+    cacheSet(key, out);
+    return out;
+  });
 }
 
 export async function fetchLinks(
@@ -177,61 +183,66 @@ export async function fetchLinks(
   relationTypes: string[],
   /** When provided, restricts the link scan to edges originating from these ids —
    * used to extend outward from the query's baseline instead of scanning the whole project. */
-  sourceIds?: number[]
+  sourceIds?: number[],
+  bypassCache = false
 ): Promise<WorkItemRelation[]> {
   const key = cacheKeyFromParts(
     [orgUrl, project, [...relationTypes].sort().join(',')],
     sourceIds ? [...sourceIds].sort((a, b) => a - b) : []
   );
-  const cached = cacheGet<WorkItemRelation[]>(key);
-  if (cached) return cached;
-
-  const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
-  const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/wiql`;
-  const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
-
-  // A large seed/frontier set inlined whole into one WIQL `IN (...)` clause can exceed
-  // ADO's query length/complexity limit and 400. Chunk it the same way batch work-item
-  // fetches already do (config.ADO_BATCH_SIZE) and issue the chunks concurrently.
-  const idChunks: number[][] = [];
-  if (sourceIds && sourceIds.length > 0) {
-    for (let i = 0; i < sourceIds.length; i += config.ADO_BATCH_SIZE) {
-      idChunks.push(sourceIds.slice(i, i + config.ADO_BATCH_SIZE));
-    }
-  } else {
-    idChunks.push([]); // no id filter — single unscoped query
+  if (!bypassCache) {
+    const cached = cacheGet<WorkItemRelation[]>(key);
+    if (cached) return cached;
   }
 
-  const runQuery = (ids: number[]) => withApiVersionFallback(async (apiVersion) => {
-    const idFilter = ids.length > 0 ? ` AND [Source].[System.Id] IN (${ids.join(',')})` : '';
-    const wiqlQuery = {
-      // No TOP clause — ADO rejects TOP on WorkItemLinks queries; the server enforces its own cap.
-      query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause})${idFilter} MODE (MustContain)`,
-    };
-    return client.post<{ workItemRelations: WorkItemRelation[] }>(url, wiqlQuery, apiVersion || undefined);
+  return withSingleFlight(key, async () => {
+    const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
+    const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/wiql`;
+    const inClause = relationTypes.map(rt => `'${rt}'`).join(',');
+
+    // A large seed/frontier set inlined whole into one WIQL `IN (...)` clause can exceed
+    // ADO's query length/complexity limit and 400. Chunk it the same way batch work-item
+    // fetches already do (config.ADO_BATCH_SIZE) and issue the chunks concurrently.
+    const idChunks: number[][] = [];
+    if (sourceIds && sourceIds.length > 0) {
+      for (let i = 0; i < sourceIds.length; i += config.ADO_BATCH_SIZE) {
+        idChunks.push(sourceIds.slice(i, i + config.ADO_BATCH_SIZE));
+      }
+    } else {
+      idChunks.push([]); // no id filter — single unscoped query
+    }
+
+    const runQuery = (ids: number[]) => withApiVersionFallback(async (apiVersion) => {
+      const idFilter = ids.length > 0 ? ` AND [Source].[System.Id] IN (${ids.join(',')})` : '';
+      const wiqlQuery = {
+        // No TOP clause — ADO rejects TOP on WorkItemLinks queries; the server enforces its own cap.
+        query: `SELECT [Source].[System.Id],[Target].[System.Id] FROM WorkItemLinks WHERE [Source].[System.TeamProject] = '${project}' AND [System.Links.LinkType] IN (${inClause})${idFilter} MODE (MustContain)`,
+      };
+      return client.post<{ workItemRelations: WorkItemRelation[] }>(url, wiqlQuery, apiVersion || undefined);
+    });
+
+    const chunkResults = await Promise.all(
+      idChunks.map(ids => adoConcurrencyLimit(() => runQuery(ids)))
+    );
+
+    // Filter null/non-integer pairs, dedupe across chunks (a pair could theoretically
+    // recur if source ids overlap between chunks, though chunking itself never overlaps).
+    const seenPairs = new Set<string>();
+    const relations: WorkItemRelation[] = [];
+    for (const result of chunkResults) {
+      for (const r of result.workItemRelations ?? []) {
+        if (!r.source || !r.target) continue;
+        if (!Number.isInteger(r.source.id) || !Number.isInteger(r.target.id)) continue;
+        const pairKey = `${r.source.id}-${r.target.id}`;
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        relations.push(r);
+      }
+    }
+
+    cacheSet(key, relations);
+    return relations;
   });
-
-  const chunkResults = await Promise.all(
-    idChunks.map(ids => adoConcurrencyLimit(() => runQuery(ids)))
-  );
-
-  // Filter null/non-integer pairs, dedupe across chunks (a pair could theoretically
-  // recur if source ids overlap between chunks, though chunking itself never overlaps).
-  const seenPairs = new Set<string>();
-  const relations: WorkItemRelation[] = [];
-  for (const result of chunkResults) {
-    for (const r of result.workItemRelations ?? []) {
-      if (!r.source || !r.target) continue;
-      if (!Number.isInteger(r.source.id) || !Number.isInteger(r.target.id)) continue;
-      const pairKey = `${r.source.id}-${r.target.id}`;
-      if (seenPairs.has(pairKey)) continue;
-      seenPairs.add(pairKey);
-      relations.push(r);
-    }
-  }
-
-  cacheSet(key, relations);
-  return relations;
 }
 
 export async function fetchWorkItems(
@@ -240,107 +251,153 @@ export async function fetchWorkItems(
   project: string,
   ids: number[],
   fields: string[],
-  effortField?: string
+  effortField?: string,
+  bypassCache = false
 ): Promise<WorkItem[]> {
   if (ids.length === 0) return [];
 
   const sortedIds = [...ids].sort((a, b) => a - b);
   // Use streaming hash helper to avoid building a ~60KB intermediate string for 10k ids
   const key = cacheKeyFromParts([orgUrl, project, fields.join(',')], sortedIds);
-  const cached = cacheGet<WorkItem[]>(key);
-  if (cached) return cached;
-
-  const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
-  const batchUrl = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/workitemsbatch`;
-
-  const batchSize = config.ADO_BATCH_SIZE;
-  const chunks: number[][] = [];
-  for (let i = 0; i < sortedIds.length; i += batchSize) {
-    chunks.push(sortedIds.slice(i, i + batchSize));
+  if (!bypassCache) {
+    const cached = cacheGet<WorkItem[]>(key);
+    if (cached) return cached;
   }
 
-  // Use p-limit for controlled concurrency
-  const batchResults = await Promise.all(
-    chunks.map(chunk =>
+  return withSingleFlight(key, async () => {
+    const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
+    const batchUrl = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/workitemsbatch`;
+
+    const batchSize = config.ADO_BATCH_SIZE;
+    const chunks: number[][] = [];
+    for (let i = 0; i < sortedIds.length; i += batchSize) {
+      chunks.push(sortedIds.slice(i, i + batchSize));
+    }
+
+    // Use p-limit for controlled concurrency
+    const batchResults = await Promise.all(
+      chunks.map(chunk =>
+        adoConcurrencyLimit(async () => {
+          const result = await withApiVersionFallback(async (apiVersion) => {
+            return client.post<{
+              value: Array<{ id: number; fields: Record<string, unknown>; url?: string }>;
+            }>(
+              batchUrl,
+              { ids: chunk, fields, errorPolicy: 'Omit' },
+              apiVersion || undefined
+            );
+          });
+          return result.value ?? [];
+        })
+      )
+    );
+
+    const knownFields = new Set([
+      'System.Id',
+      'System.WorkItemType',
+      'System.Title',
+      'System.State',
+      'System.TeamProject',
+      'System.AssignedTo',
+      'System.AreaPath',
+      'System.IterationPath',
+      'System.Tags',
+      'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.StoryPoints',
+      'Microsoft.VSTS.Scheduling.RemainingWork',
+      'Microsoft.VSTS.Scheduling.OriginalEstimate',
+      'Microsoft.VSTS.Scheduling.CompletedWork',
+    ]);
+
+    const numOrNull = (f: Record<string, unknown>, key: string): number | null => {
+      const v = f[key];
+      return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    };
+    const strOrUndef = (f: Record<string, unknown>, key: string): string | undefined => {
+      const v = f[key];
+      if (v == null) return undefined;
+      // System.AssignedTo is an object { displayName, ... } — extract displayName
+      if (typeof v === 'object' && v !== null && 'displayName' in v) {
+        return String((v as { displayName: unknown }).displayName ?? '');
+      }
+      return String(v);
+    };
+
+    // Resolve which field carries effort:
+    // 1. Use explicit effortField param if provided.
+    // 2. Fall back to first field in `fields` not in knownFields (custom effort field).
+    // 3. If effortField is a known base field (e.g. OriginalEstimate), read it directly.
+    const resolvedEffortField = effortField
+      ?? fields.find(fn => !knownFields.has(fn))
+      ?? null;
+
+    const allItems: WorkItem[] = batchResults.flat().map(raw => {
+      const f = raw.fields;
+      const effortRaw = resolvedEffortField != null ? f[resolvedEffortField] : undefined;
+      const effort = typeof effortRaw === 'number' && Number.isFinite(effortRaw) ? effortRaw : null;
+
+      return {
+        id: raw.id,
+        type: String(f['System.WorkItemType'] ?? ''),
+        title: String(f['System.Title'] ?? ''),
+        state: String(f['System.State'] ?? ''),
+        teamProject: String(f['System.TeamProject'] ?? ''),
+        effort,
+        assignedTo: strOrUndef(f, 'System.AssignedTo'),
+        areaPath: strOrUndef(f, 'System.AreaPath'),
+        iterationPath: strOrUndef(f, 'System.IterationPath'),
+        priority: numOrNull(f, 'Microsoft.VSTS.Common.Priority'),
+        tags: strOrUndef(f, 'System.Tags'),
+        storyPoints: numOrNull(f, 'Microsoft.VSTS.Scheduling.StoryPoints'),
+        remainingWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.RemainingWork'),
+        originalEstimate: numOrNull(f, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
+        completedWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.CompletedWork'),
+        url: raw.url,
+      };
+    });
+
+    cacheSet(key, allItems);
+    return allItems;
+  });
+}
+
+export type MissingIdReason = 'restricted' | 'deleted' | 'missing';
+
+/**
+ * Classifies ids that `fetchWorkItems` omitted (errorPolicy: 'Omit' drops both
+ * permission-denied and deleted/nonexistent ids indistinguishably). Probes each id
+ * individually via a single-item GET so the UI can show "no access" vs "deleted" instead
+ * of one generic "missing" placeholder. Only called for the (normally small) leftover set,
+ * not the whole batch — cost stays bounded via the existing concurrency limiter.
+ */
+export async function classifyMissingIds(
+  client: AdoClient,
+  orgUrl: string,
+  project: string,
+  ids: number[]
+): Promise<Map<number, MissingIdReason>> {
+  const result = new Map<number, MissingIdReason>();
+  if (ids.length === 0) return result;
+
+  const normalizedUrl = orgUrl.endsWith('/') ? orgUrl : `${orgUrl}/`;
+
+  await Promise.all(
+    ids.map(id =>
       adoConcurrencyLimit(async () => {
-        const result = await withApiVersionFallback(async (apiVersion) => {
-          return client.post<{
-            value: Array<{ id: number; fields: Record<string, unknown>; url?: string }>;
-          }>(
-            batchUrl,
-            { ids: chunk, fields, errorPolicy: 'Omit' },
-            apiVersion || undefined
-          );
-        });
-        return result.value ?? [];
+        const url = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/workitems/${id}`;
+        try {
+          await withApiVersionFallback(apiVersion => client.get(url, apiVersion || undefined));
+          // Fetched successfully in isolation — treat as transiently missing from the batch.
+          result.set(id, 'missing');
+        } catch (err) {
+          const status = (err as { response?: { status?: number } }).response?.status;
+          if (status === 401 || status === 403) result.set(id, 'restricted');
+          else if (status === 404) result.set(id, 'deleted');
+          else result.set(id, 'missing');
+        }
       })
     )
   );
 
-  const knownFields = new Set([
-    'System.Id',
-    'System.WorkItemType',
-    'System.Title',
-    'System.State',
-    'System.TeamProject',
-    'System.AssignedTo',
-    'System.AreaPath',
-    'System.IterationPath',
-    'System.Tags',
-    'Microsoft.VSTS.Common.Priority',
-    'Microsoft.VSTS.Scheduling.StoryPoints',
-    'Microsoft.VSTS.Scheduling.RemainingWork',
-    'Microsoft.VSTS.Scheduling.OriginalEstimate',
-    'Microsoft.VSTS.Scheduling.CompletedWork',
-  ]);
-
-  const numOrNull = (f: Record<string, unknown>, key: string): number | null => {
-    const v = f[key];
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
-  };
-  const strOrUndef = (f: Record<string, unknown>, key: string): string | undefined => {
-    const v = f[key];
-    if (v == null) return undefined;
-    // System.AssignedTo is an object { displayName, ... } — extract displayName
-    if (typeof v === 'object' && v !== null && 'displayName' in v) {
-      return String((v as { displayName: unknown }).displayName ?? '');
-    }
-    return String(v);
-  };
-
-  // Resolve which field carries effort:
-  // 1. Use explicit effortField param if provided.
-  // 2. Fall back to first field in `fields` not in knownFields (custom effort field).
-  // 3. If effortField is a known base field (e.g. OriginalEstimate), read it directly.
-  const resolvedEffortField = effortField
-    ?? fields.find(fn => !knownFields.has(fn))
-    ?? null;
-
-  const allItems: WorkItem[] = batchResults.flat().map(raw => {
-    const f = raw.fields;
-    const effortRaw = resolvedEffortField != null ? f[resolvedEffortField] : undefined;
-    const effort = typeof effortRaw === 'number' && Number.isFinite(effortRaw) ? effortRaw : null;
-
-    return {
-      id: raw.id,
-      type: String(f['System.WorkItemType'] ?? ''),
-      title: String(f['System.Title'] ?? ''),
-      state: String(f['System.State'] ?? ''),
-      teamProject: String(f['System.TeamProject'] ?? ''),
-      effort,
-      assignedTo: strOrUndef(f, 'System.AssignedTo'),
-      areaPath: strOrUndef(f, 'System.AreaPath'),
-      iterationPath: strOrUndef(f, 'System.IterationPath'),
-      priority: numOrNull(f, 'Microsoft.VSTS.Common.Priority'),
-      tags: strOrUndef(f, 'System.Tags'),
-      storyPoints: numOrNull(f, 'Microsoft.VSTS.Scheduling.StoryPoints'),
-      remainingWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.RemainingWork'),
-      originalEstimate: numOrNull(f, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
-      completedWork: numOrNull(f, 'Microsoft.VSTS.Scheduling.CompletedWork'),
-      url: raw.url,
-    };
-  });
-
-  cacheSet(key, allItems);
-  return allItems;
+  return result;
 }

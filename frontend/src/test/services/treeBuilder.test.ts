@@ -181,7 +181,9 @@ describe('buildTree', () => {
       ]);
       const node = buildTree(1, adjacency, itemsById, 'Closed');
       const node3 = node!.children[0].children[0];
-      expect(node3.cutCycles).toEqual([1]);
+      expect(node3.cutCycles).toEqual([
+        { target: 1, via: 'System.LinkTypes.Hierarchy-Forward', path: [1, 2, 3, 1] },
+      ]);
       // Nodes that never hit a cycle have no cutCycles at all
       expect(node!.cutCycles).toBeUndefined();
       expect(node!.children[0].cutCycles).toBeUndefined();

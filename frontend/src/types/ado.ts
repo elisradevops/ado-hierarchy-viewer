@@ -23,6 +23,9 @@ export interface WorkItem {
   originalEstimate?: number | null;
   completedWork?: number | null;
   url?: string;
+  /** Set only on synthetic placeholders (see treeBuilder.makePlaceholder) — why this linked
+   *  id never resolved to a real work item: no access to it, deleted, or unexplained. */
+  placeholderReason?: 'restricted' | 'deleted' | 'missing';
 }
 
 export interface WiqlWorkItemRelationsResponse {

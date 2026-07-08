@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AdoClient } from '../services/AdoClient';
 import { extractCreds } from '../middleware/creds';
-import { fetchLinks, fetchWorkItems, fetchQueryRootIds, type WorkItem, type WorkItemRelation } from '../services/HierarchyService';
+import { fetchLinks, fetchWorkItems, fetchQueryRootIds, classifyMissingIds, type WorkItem, type WorkItemRelation } from '../services/HierarchyService';
 import { adoConcurrencyLimit } from '../utils/queue';
 import {
   LinksRequestSchema,
@@ -106,7 +106,10 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
 
     // The query is always the baseline — link types only extend outward from the
     // work items the query actually returned, they never seed the hierarchy on their own.
-    const q = await fetchQueryRootIds(client, creds.orgUrl, project, queryId);
+    // bypassCache=true: this endpoint backs the Refresh button/auto-refresh — a refresh
+    // that can return stale cached data (e.g. still showing an item deleted seconds ago
+    // until the cache's TTL naturally expires) defeats its own purpose.
+    const q = await fetchQueryRootIds(client, creds.orgUrl, project, queryId, true);
     const queryRootIds = q.rootIds;
     const queryRelations = q.queryRelations;
     const matchedIds = q.matchedIds;
@@ -131,7 +134,7 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
       // project — a cross-project (tree/oneHop) query can seed ids that don't live in
       // `project`, and WIQL's [Source].[System.TeamProject] filter would silently drop
       // their links if hop 0 assumed they were all in `project`.
-      const seedItems = await fetchWorkItems(client, creds.orgUrl, project, [...seedIds], fields, resolvedEffortField);
+      const seedItems = await fetchWorkItems(client, creds.orgUrl, project, [...seedIds], fields, resolvedEffortField, true);
       for (const item of seedItems) resolvedItemsById.set(item.id, item);
       let frontierByProject = new Map<string, number[]>();
       for (const item of seedItems) {
@@ -146,7 +149,7 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
         // an unusually wide frontier (many newly-discovered projects in one hop)
         // shouldn't fire unlimited concurrent requests against ADO.
         const batches = await Promise.all(
-          entries.map(([p, ids]) => adoConcurrencyLimit(() => fetchLinks(client, creds.orgUrl, p, relationTypes, ids)))
+          entries.map(([p, ids]) => adoConcurrencyLimit(() => fetchLinks(client, creds.orgUrl, p, relationTypes, ids, true)))
         );
 
         const idsToResolve = new Set<number>();
@@ -164,7 +167,7 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
         if (idsToResolve.size === 0) break;
         for (const id of idsToResolve) visitedIds.add(id);
 
-        const newItems = await fetchWorkItems(client, creds.orgUrl, project, [...idsToResolve], fields, resolvedEffortField);
+        const newItems = await fetchWorkItems(client, creds.orgUrl, project, [...idsToResolve], fields, resolvedEffortField, true);
         const nextFrontierByProject = new Map<string, number[]>();
         for (const item of newItems) {
           resolvedItemsById.set(item.id, item);
@@ -193,11 +196,25 @@ export async function postHierarchy(req: Request, res: Response, next: NextFunct
 
     const missingIds = [...idSet].filter(id => !resolvedItemsById.has(id));
     const missingItems = missingIds.length > 0
-      ? await fetchWorkItems(client, creds.orgUrl, project, missingIds, fields, resolvedEffortField)
+      ? await fetchWorkItems(client, creds.orgUrl, project, missingIds, fields, resolvedEffortField, true)
       : [];
     const workItems = [...resolvedItemsById.values(), ...missingItems];
 
-    res.json({ workItemRelations: relations, workItems, rootIds: queryRootIds, matchedIds });
+    // Ids still unresolved after the second-chance batch fetch: classify why (no access vs
+    // deleted) instead of surfacing a single generic "missing" placeholder to the user.
+    const missingItemIds = new Set(missingItems.map(item => item.id));
+    const stillMissingIds = missingIds.filter(id => !missingItemIds.has(id));
+    const missingIdReasons = stillMissingIds.length > 0
+      ? await classifyMissingIds(client, creds.orgUrl, project, stillMissingIds)
+      : new Map();
+
+    res.json({
+      workItemRelations: relations,
+      workItems,
+      rootIds: queryRootIds,
+      matchedIds,
+      missingIdReasons: Object.fromEntries(missingIdReasons),
+    });
   } catch (err) {
     next(err);
   }

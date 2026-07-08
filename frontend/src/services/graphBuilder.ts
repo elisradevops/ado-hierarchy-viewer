@@ -1,4 +1,5 @@
 import type { WorkItemRelation, AdjacencyMap, AdjacencyEdge } from '../types';
+import { isSymmetric } from '../domain/adoLinkTypes';
 
 /**
  * Determine which rels are "primary spine" (forward direction or only-selected-direction)
@@ -63,4 +64,32 @@ export function buildAdjacency(
   }
 
   return adjacency;
+}
+
+/**
+ * Ids that are the directional-spine child of 2+ distinct parents — a diamond / likely
+ * mis-link, not a cycle. Only non-ref, non-symmetric ("spine") edges count: reciprocal
+ * (Child+Parent) or symmetric (Related) edges naturally produce a "second parent" that
+ * is really the same relationship viewed from the other side, and must not trigger this.
+ */
+export function findMultiParents(adjacency: AdjacencyMap): Map<number, number[]> {
+  const parentsByChild = new Map<number, number[]>();
+
+  for (const [parentId, edges] of adjacency) {
+    for (const edge of edges) {
+      if (edge.isRef || isSymmetric(edge.rel)) continue;
+      const parents = parentsByChild.get(edge.childId);
+      if (parents) {
+        if (!parents.includes(parentId)) parents.push(parentId);
+      } else {
+        parentsByChild.set(edge.childId, [parentId]);
+      }
+    }
+  }
+
+  const multiParents = new Map<number, number[]>();
+  for (const [childId, parents] of parentsByChild) {
+    if (parents.length >= 2) multiParents.set(childId, parents);
+  }
+  return multiParents;
 }

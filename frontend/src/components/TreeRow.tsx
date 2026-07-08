@@ -5,6 +5,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import LinkIcon from '@mui/icons-material/Link';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import LoopIcon from '@mui/icons-material/Loop';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import LockIcon from '@mui/icons-material/Lock';
 import { StateChip } from './StateChip';
 import { ProgressBar, TimeProgressBar } from './ProgressBar';
 import { buildWorkItemUrl } from '../utils/adoUrlUtils';
@@ -159,6 +161,14 @@ const DISCOVERED_REL_COLOR = '#B45309';
 // Distinct color for the cut-cycle indicator — a link the tree builder dropped to avoid
 // infinite recursion (it would loop back to an ancestor already on this branch).
 const CUT_CYCLE_COLOR = '#7C3AED';
+
+// Distinct color for the multi-parent indicator — this item is a directional-spine child
+// under 2+ distinct parents (diamond / likely mis-link), separate from a true cycle.
+const MULTI_PARENT_COLOR = '#DC2626';
+
+// Distinct color for a placeholder whose id never resolved because the current token has
+// no access to it (vs a deleted/unexplained placeholder) — see TreeNode.placeholderReason.
+const RESTRICTED_COLOR = '#B91C1C';
 
 const ID_SX = {
   fontSize: '0.68rem',
@@ -320,14 +330,30 @@ export const TreeRow = React.memo(function TreeRow({
   const relLabel = node.linkRel ? relChipLabel(node.linkRel) : '';
   const relTitle = node.linkRel ? relDisplayName(node.linkRel) : undefined;
 
-  // Cut-cycle indicator: a link on this node pointed back to an ancestor already on this
-  // branch, so treeBuilder dropped it to avoid infinite recursion. Surface it rather than
-  // let a child silently disappear (see TreeNode.cutCycles / services/treeBuilder.ts).
+  // Cut-cycle indicator: a directional-spine link on this node pointed back to an ancestor
+  // already on this branch, so treeBuilder dropped it to avoid infinite recursion. Reciprocal
+  // (isRef) and symmetric (e.g. Related) back-edges are NOT genuine cycles and never appear
+  // here (see TreeNode.cutCycles / services/treeBuilder.ts).
   const cutCycles = node.cutCycles;
   const hasCutCycles = !!cutCycles && cutCycles.length > 0;
   const cutCycleTitle = hasCutCycles
-    ? `Cyclic link${cutCycles!.length > 1 ? 's' : ''} to #${cutCycles!.join(', #')} not shown (would loop back)`
+    ? cutCycles!
+        .map(c => `Cycle via ${relDisplayName(c.via)}: ${c.path.map(id => `#${id}`).join(' → ')}`)
+        .join('\n')
     : undefined;
+
+  // Multi-parent indicator: this node's id is a directional-spine child under 2+ distinct
+  // parents (a diamond / mis-link), not a cycle (see graphBuilder.findMultiParents).
+  const multiParents = node.multiParents;
+  const hasMultiParents = !!multiParents && multiParents.length > 1;
+  const multiParentTitle = hasMultiParents
+    ? `Work item #${node.id} already exists under another parent: ${multiParents!.map(id => `#${id}`).join(', ')}`
+    : undefined;
+
+  // Restricted placeholder: this linked id never resolved because the current token has
+  // no access to it (distinguished from a deleted/unexplained placeholder — see
+  // TreeNode.placeholderReason / treeBuilder.makePlaceholder).
+  const isRestricted = node.placeholderReason === 'restricted';
 
   const expandable = hasChildren && !node.isRef;
 
@@ -383,6 +409,26 @@ export const TreeRow = React.memo(function TreeRow({
                     >
                       <LoopIcon sx={REL_CHIP_ICON_SX} />
                       cycle
+                    </Box>
+                  )}
+                  {hasMultiParents && (
+                    <Box
+                      component="span"
+                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(MULTI_PARENT_COLOR, 0.1), color: MULTI_PARENT_COLOR, border: `1px solid ${alpha(MULTI_PARENT_COLOR, 0.25)}` }}
+                      title={multiParentTitle}
+                    >
+                      <WarningAmberIcon sx={REL_CHIP_ICON_SX} />
+                      duplicate link
+                    </Box>
+                  )}
+                  {isRestricted && (
+                    <Box
+                      component="span"
+                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(RESTRICTED_COLOR, 0.1), color: RESTRICTED_COLOR, border: `1px solid ${alpha(RESTRICTED_COLOR, 0.25)}` }}
+                      title={`No access to #${node.id} with the current token/PAT`}
+                    >
+                      <LockIcon sx={REL_CHIP_ICON_SX} />
+                      no access
                     </Box>
                   )}
                 </Box>

@@ -7,6 +7,7 @@ jest.mock('../services/HierarchyService', () => ({
   fetchLinks: jest.fn().mockResolvedValue([]),
   fetchWorkItems: jest.fn().mockResolvedValue([]),
   fetchQueryRootIds: jest.fn().mockResolvedValue({ rootIds: [], queryRelations: [], matchedIds: null }),
+  classifyMissingIds: jest.fn().mockResolvedValue(new Map()),
 }));
 
 // Mock AdoClient for metadata routes
@@ -244,7 +245,8 @@ describe('BFF route integration', () => {
         expect.any(String),
         expect.arrayContaining([2, 3]),
         expect.any(Array),
-        expect.any(String)
+        expect.any(String),
+        true // bypassCache — /hierarchy backs Refresh/auto-refresh, must not serve stale cache
       );
     });
 
@@ -271,7 +273,8 @@ describe('BFF route integration', () => {
         expect.any(String),
         'OtherProject', // not 'MyProject' — scoped to where the seed item actually lives
         ['X'],
-        [1]
+        [1],
+        true // bypassCache
       );
     });
 

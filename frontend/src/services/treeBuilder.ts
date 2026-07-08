@@ -1,10 +1,17 @@
 import type { AdjacencyMap, TreeNode, WorkItem } from '../types';
+import { isSymmetric } from '../domain/adoLinkTypes';
 
 const PLACEHOLDER_TYPE  = 'Unknown';
 const PLACEHOLDER_STATE = 'Unknown';
 
-function makePlaceholder(id: number): WorkItem {
-  return { id, type: PLACEHOLDER_TYPE, title: `(missing #${id})`, state: PLACEHOLDER_STATE, teamProject: '', effort: null, assignedTo: undefined, areaPath: undefined, iterationPath: undefined, priority: undefined, tags: undefined, storyPoints: undefined, remainingWork: undefined, originalEstimate: undefined, completedWork: null };
+const PLACEHOLDER_TITLE: Record<'restricted' | 'deleted' | 'missing', (id: number) => string> = {
+  restricted: id => `(no access #${id})`,
+  deleted: id => `(deleted #${id})`,
+  missing: id => `(missing #${id})`,
+};
+
+function makePlaceholder(id: number, reason: 'restricted' | 'deleted' | 'missing' = 'missing'): WorkItem {
+  return { id, type: PLACEHOLDER_TYPE, title: PLACEHOLDER_TITLE[reason](id), state: PLACEHOLDER_STATE, teamProject: '', effort: null, assignedTo: undefined, areaPath: undefined, iterationPath: undefined, priority: undefined, tags: undefined, storyPoints: undefined, remainingWork: undefined, originalEstimate: undefined, completedWork: null, placeholderReason: reason };
 }
 
 // Intermediate build node — tree structure only, no rollup fields yet
@@ -15,8 +22,8 @@ interface BuildNode {
   isRef?: boolean;
   linkOrigin?: 'query' | 'link';
   isQueryMatch?: boolean;
-  /** Ids of ancestors a dropped (would-cycle) edge on this node pointed back to. */
-  cutCycles?: number[];
+  /** Genuine directional-spine cycles dropped on this node (see isSymmetric/isRef gate below). */
+  cutCycles?: Array<{ target: number; via: string; path: number[] }>;
   children: BuildNode[];
 }
 
@@ -27,12 +34,14 @@ export function buildTree(
   closedState: string,
   _visited: Set<number> = new Set(),
   matchedIds?: Set<number>,
+  multiParents?: Map<number, number[]>,
+  missingIdReasons?: Record<number, 'restricted' | 'deleted' | 'missing'>,
 ): TreeNode | null {
   if (_visited.has(rootId)) return null; // cycle guard at root (used by tests)
 
   const rootBuild: BuildNode = {
     id: rootId,
-    item: itemsById[rootId] ?? makePlaceholder(rootId),
+    item: itemsById[rootId] ?? makePlaceholder(rootId, missingIdReasons?.[rootId]),
     isQueryMatch: matchedIds?.has(rootId),
     children: [],
   };
@@ -70,16 +79,22 @@ export function buildTree(
 
     const edge = edges[frame.edgeIdx++];
     if (path.has(edge.childId)) {
-      // Cycle on this branch — edge dropped to avoid infinite recursion. Record it
-      // on the current node so the UI can surface that a link was silently cut,
-      // rather than a child disappearing with no indication (see cutCycles on TreeNode).
-      (node.cutCycles ??= []).push(edge.childId);
+      // Back-edge to an ancestor. Only a directional-spine edge (not a reverse
+      // reciprocal of a selected forward, not a symmetric type like Related) is a
+      // genuine cycle — reciprocal/symmetric back-edges are just the same relationship
+      // viewed from the other side and are silently dropped without a chip.
+      if (!edge.isRef && !isSymmetric(edge.rel)) {
+        const ancestorIdx = stack.findIndex(f => f.node.id === edge.childId);
+        const cyclePath = stack.slice(ancestorIdx).map(f => f.node.id);
+        cyclePath.push(edge.childId);
+        (node.cutCycles ??= []).push({ target: edge.childId, via: edge.rel, path: cyclePath });
+      }
       continue;
     }
 
     const childBuild: BuildNode = {
       id: edge.childId,
-      item: itemsById[edge.childId] ?? makePlaceholder(edge.childId),
+      item: itemsById[edge.childId] ?? makePlaceholder(edge.childId, missingIdReasons?.[edge.childId]),
       linkRel: edge.rel,
       isRef: edge.isRef,
       linkOrigin: edge.origin,
@@ -177,8 +192,10 @@ export function buildTree(
       remainingWork: item.remainingWork,
       originalEstimate: item.originalEstimate,
       completedWork: item.completedWork,
+      placeholderReason: item.placeholderReason,
       linkRel: n.linkRel,
       isRef: n.isRef,
+      multiParents: multiParents?.get(n.id),
       linkOrigin: n.linkOrigin,
       isQueryMatch: n.isQueryMatch,
       cutCycles: n.cutCycles,

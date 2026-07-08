@@ -260,6 +260,37 @@ async function fetchWorkItemsBatchDirect(
   return chunkResults.flat();
 }
 
+/**
+ * Mirrors HierarchyService.classifyMissingIds (BFF): probes ids that getWorkItemsBatch
+ * omitted, individually, so a permission-restricted linked item can be distinguished
+ * from a genuinely deleted one instead of one generic "missing" placeholder.
+ */
+async function classifyMissingIdsDirect(
+  project: string,
+  ids: number[],
+  signal?: AbortSignal
+): Promise<Record<number, 'restricted' | 'deleted' | 'missing'>> {
+  const result: Record<number, 'restricted' | 'deleted' | 'missing'> = {};
+  if (ids.length === 0) return result;
+
+  const client = getClient(WorkItemTrackingRestClient);
+  await mapWithConcurrency(ids, BATCH_FETCH_CONCURRENCY, async (id) => {
+    if (signal?.aborted) return;
+    try {
+      await client.getWorkItem(id, project);
+      result[id] = 'missing'; // resolved in isolation — transiently missing from the batch
+    } catch (err) {
+      const status = (err as { status?: number; statusCode?: number }).status
+        ?? (err as { status?: number; statusCode?: number }).statusCode;
+      if (status === 401 || status === 403) result[id] = 'restricted';
+      else if (status === 404) result[id] = 'deleted';
+      else result[id] = 'missing';
+    }
+  });
+
+  return result;
+}
+
 // ─── Query match derivation ─────────────────────────────────────────────────
 //
 // ADO tree/oneHop queries can pull in ancestor/sibling scaffolding beyond the actual
@@ -444,17 +475,17 @@ export async function fetchHierarchyDirect(
   _orgUrl: string,
   _credential: string,
   signal?: AbortSignal
-): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null }> {
+): Promise<{ workItemRelations: WorkItemRelation[]; workItems: WorkItem[]; rootIds?: number[]; matchedIds: number[] | null; missingIdReasons: Record<number, 'restricted' | 'deleted' | 'missing'> }> {
   // The query is always the baseline — link types only extend outward from the work
   // items the query actually returned, they never seed the hierarchy on their own.
-  if (!config.queryId) return { workItemRelations: [], workItems: [], rootIds: [], matchedIds: null };
+  if (!config.queryId) return { workItemRelations: [], workItems: [], rootIds: [], matchedIds: null, missingIdReasons: {} };
   const q = await fetchQueryRootIdsDirect('', '', config.teamProject, config.queryId, signal);
   const rootIds = q.rootIds;
   const queryRelations = q.queryRelations;
   const matchedIds = q.matchedIds;
 
   // N4: abort checks between sequential awaits to skip unnecessary batch fetches after cancel
-  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null };
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null, missingIdReasons: {} };
 
   const effortField = config.effortField ?? DEFAULT_EFFORT_FIELD;
   const baseFields = buildWiFields(effortField);
@@ -529,7 +560,7 @@ export async function fetchHierarchyDirect(
     }
   }
 
-  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null };
+  if (signal?.aborted) return { workItemRelations: [], workItems: [], rootIds, matchedIds: null, missingIdReasons: {} };
 
   // Merge query-native edges with link-discovered edges — the query wins when both
   // describe the same source→target pair (it's the "actual query result").
@@ -551,5 +582,13 @@ export async function fetchHierarchyDirect(
     : [];
   const workItems = [...resolvedItemsById.values(), ...missingItems];
 
-  return { workItemRelations: relations, workItems, rootIds, matchedIds };
+  // Ids still unresolved after the second-chance batch fetch: classify why (no access vs
+  // deleted) instead of surfacing a single generic "missing" placeholder to the user.
+  const missingItemIds = new Set(missingItems.map(item => item.id));
+  const stillMissingIds = missingIds.filter(id => !missingItemIds.has(id));
+  const missingIdReasons = stillMissingIds.length > 0 && !signal?.aborted
+    ? await classifyMissingIdsDirect(config.teamProject, stillMissingIds, signal)
+    : {};
+
+  return { workItemRelations: relations, workItems, rootIds, matchedIds, missingIdReasons };
 }

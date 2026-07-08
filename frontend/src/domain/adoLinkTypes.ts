@@ -33,6 +33,12 @@ export interface LinkTypeSeedEntry {
   isCustom: boolean;
 }
 
+/** True for link types without a -Forward/-Reverse suffix (e.g. Related) — reciprocal by nature, not a directional spine. */
+export function isSymmetric(rel: string | undefined): boolean {
+  if (!rel) return false;
+  return !rel.endsWith('-Forward') && !rel.endsWith('-Reverse');
+}
+
 export const SEED_LINK_TYPES: readonly LinkTypeSeedEntry[] = [
   { referenceName: ADO_LINK_TYPES.HIERARCHY_FORWARD, displayName: 'Child (Hierarchy)', isCustom: false },
   { referenceName: ADO_LINK_TYPES.HIERARCHY_REVERSE, displayName: 'Parent (Hierarchy)', isCustom: false },

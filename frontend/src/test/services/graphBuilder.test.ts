@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAdjacency } from '../../services/graphBuilder';
+import { buildAdjacency, findMultiParents } from '../../services/graphBuilder';
 import type { AdjacencyEdge } from '../../types';
 import { rel } from '../fixtures/relations';
 
@@ -126,5 +126,54 @@ describe('buildAdjacency', () => {
       const adjacency = buildAdjacency([]);
       expect(adjacency.size).toBe(0);
     });
+  });
+});
+
+describe('findMultiParents', () => {
+  it('diamond: child under 2 distinct spine parents is reported with both parent ids', () => {
+    // US01(1) -> Task01(3), US03(2) -> Task01(3)
+    const adjacency = buildAdjacency([rel(1, 3), rel(2, 3)]);
+    const multiParents = findMultiParents(adjacency);
+    expect(multiParents.get(3)?.slice().sort()).toEqual([1, 2]);
+  });
+
+  it('linear chain: no multi-parents', () => {
+    const adjacency = buildAdjacency([rel(1, 2), rel(2, 3)]);
+    expect(findMultiParents(adjacency).size).toBe(0);
+  });
+
+  it('Related-only shared child is not reported (symmetric, not spine)', () => {
+    const adjacency = buildAdjacency(
+      [rel(1, 3, 'System.LinkTypes.Related'), rel(2, 3, 'System.LinkTypes.Related')],
+      ['System.LinkTypes.Related'],
+    );
+    expect(findMultiParents(adjacency).size).toBe(0);
+  });
+
+  it('Child+Parent reciprocal is not reported (isRef, not spine)', () => {
+    // Forward(1->2) + Reverse(2->1) both selected → Reverse edge is tagged isRef.
+    // 1 is child of 2 via the ref edge, but that must not count as a second parent.
+    const adjacency = buildAdjacency(
+      [rel(1, 2, 'System.LinkTypes.Hierarchy-Forward'), rel(2, 1, 'System.LinkTypes.Hierarchy-Reverse')],
+      ['System.LinkTypes.Hierarchy-Forward', 'System.LinkTypes.Hierarchy-Reverse'],
+    );
+    expect(findMultiParents(adjacency).size).toBe(0);
+  });
+
+  it('mixed spine + symmetric: only the spine parent counts', () => {
+    // US01(1) -[Child]-> Task01(3) (spine); US03(2) -[Related]-> Task01(3) (symmetric)
+    const adjacency = buildAdjacency(
+      [rel(1, 3, 'System.LinkTypes.Hierarchy-Forward'), rel(2, 3, 'System.LinkTypes.Related')],
+      ['System.LinkTypes.Hierarchy-Forward', 'System.LinkTypes.Related'],
+    );
+    expect(findMultiParents(adjacency).size).toBe(0);
+  });
+
+  it('custom directional pair (Elisra.CoveredBy) diamond is detected', () => {
+    const adjacency = buildAdjacency([
+      rel(1, 3, 'Elisra.CoveredBy-Forward'),
+      rel(2, 3, 'Elisra.CoveredBy-Forward'),
+    ]);
+    expect(findMultiParents(adjacency).get(3)?.slice().sort()).toEqual([1, 2]);
   });
 });
