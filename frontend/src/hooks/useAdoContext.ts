@@ -39,6 +39,10 @@ export function useAdoContext(): UseAdoContextResult {
         } else if (ctx.isAdo && !ctx.accessToken) {
           // ADO host detected but token acquisition failed — surface explicitly.
           // Without this, the UI appears connected but every request silently fails.
+          // Note: we don't separately probe token validity here (unlike standalone's
+          // /health probe in App.tsx) — a stale-but-non-empty token is instead caught
+          // by the first request's 401 and recovered via useAuthRecovery's silent
+          // refresh-and-retry, giving both modes equivalent end-to-end recovery.
           const msg = 'Could not acquire ADO token — try reloading the page.';
           setError(msg);
           requestLoadFailed(new Error(msg));

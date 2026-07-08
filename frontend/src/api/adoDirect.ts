@@ -264,8 +264,15 @@ async function fetchWorkItemsBatchDirect(
  * Mirrors HierarchyService.classifyMissingIds (BFF): probes ids that getWorkItemsBatch
  * omitted, individually, so a permission-restricted linked item can be distinguished
  * from a genuinely deleted one instead of one generic "missing" placeholder.
+ *
+ * The status→reason table (401/403→restricted, 404→deleted, else→missing) is duplicated
+ * in bff/src/services/HierarchyService.ts and NOT re-derived from a shared source — the
+ * two run in different processes/packages. Exported (not just used internally) so the
+ * frontend-side table has its own regression test (test/services/adoDirect.test.ts,
+ * "classifyMissingIdsDirect parity") mirroring the BFF's classifyMissingIds test cases
+ * 1:1; if either table changes, update both tests to keep the contract visible.
  */
-async function classifyMissingIdsDirect(
+export async function classifyMissingIdsDirect(
   project: string,
   ids: number[],
   signal?: AbortSignal

@@ -32,7 +32,7 @@ export const useConfigStore = create<ConfigStore>()(
     }),
     {
       name: 'ado-hierarchy-viewer:config',
-      version: 2,
+      version: 3,
       migrate(persisted: unknown, version: number) {
         let state = persisted as Record<string, unknown>;
 
@@ -64,10 +64,20 @@ export const useConfigStore = create<ConfigStore>()(
           };
         }
 
+        if (version < 3) {
+          // teamProject is authoritatively re-derived every load (from ADO context in
+          // extension mode, from URL/user in standalone) and must never persist —
+          // a stale persisted value could otherwise leak across modes/contexts
+          // sharing a browser origin. Drop any previously-persisted value.
+          const cfg = (state['config'] ?? {}) as Record<string, unknown>;
+          state = { ...state, config: { ...cfg, teamProject: DEFAULT_CONFIG.teamProject } };
+        }
+
         return state;
       },
+      // teamProject is intentionally excluded — see version-3 migration note above.
       partialize: (state) => ({
-        config: state.config,
+        config: { ...state.config, teamProject: DEFAULT_CONFIG.teamProject },
       }),
     }
   )

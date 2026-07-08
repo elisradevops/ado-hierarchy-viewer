@@ -28,16 +28,6 @@ let cachedSdk: typeof SDK | null = null;
 const hasAnySearchParam = (params: URLSearchParams, names: string[]): boolean =>
   names.some(name => params.has(name));
 
-const isAzureDevOpsHost = (value: string): boolean => {
-  try {
-    const url = new URL(String(value || ''));
-    const host = (url.hostname || '').toLowerCase();
-    return host === 'dev.azure.com' || host.endsWith('.visualstudio.com');
-  } catch {
-    return false;
-  }
-};
-
 const hasAdoHostSignals = (): boolean => {
   if (typeof window === 'undefined' || typeof document === 'undefined') return false;
 
@@ -60,7 +50,11 @@ const hasAdoHostSignals = (): boolean => {
   }
 
   // Azure DevOps extensions run in an iframe; referrer is typically the host page.
-  if (window.self !== window.top && isAzureDevOpsHost(document.referrer || '')) {
+  // Some proxies/policies strip or rewrite the referrer, so treat ANY cross-frame
+  // context as a signal to attempt SDK.init() — initAdoContext() races init/ready
+  // against a bounded timeout and falls back to standalone cleanly if it isn't
+  // actually an ADO host, so this only costs one bounded wait in the false-positive case.
+  if (window.self !== window.top) {
     return true;
   }
 
@@ -252,6 +246,22 @@ export async function initAdoContext(): Promise<AdoContext> {
   });
 
   return initPromise;
+}
+
+/**
+ * Re-requests an access token from the ADO host, bypassing the frozen
+ * `initPromise` cache (which holds the token fetched once at init time).
+ * Used by the `auth-unauthorized` recovery path when the cached token has
+ * expired (ADO extension access tokens are short-lived, ~1hr).
+ * Returns '' if not embedded (cachedSdk unset) or the host call fails.
+ */
+export async function getFreshAccessToken(): Promise<string> {
+  if (!cachedSdk) return '';
+  try {
+    return (await cachedSdk.getAccessToken()) as string;
+  } catch {
+    return '';
+  }
 }
 
 /**

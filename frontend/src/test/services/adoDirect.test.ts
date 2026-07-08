@@ -12,6 +12,7 @@ const witStub = {
   queryByWiql: vi.fn(),
   queryById: vi.fn(),
   getWorkItemsBatch: vi.fn(),
+  getWorkItem: vi.fn(),
   getQueries: vi.fn(),
   getQuery: vi.fn(),
 };
@@ -57,6 +58,7 @@ import {
   fetchQueriesDirect,
   fetchQueryRootIdsDirect,
   fetchHierarchyDirect,
+  classifyMissingIdsDirect,
 } from '../../api/adoDirect';
 
 beforeEach(() => {
@@ -498,5 +500,50 @@ describe('fetchHierarchyDirect', () => {
     // All ids across both chunks must be present — no drops from parallelizing the loop.
     expect(result.workItems).toHaveLength(CHILD_COUNT + 1);
     expect(new Set(result.workItems.map(w => w.id)).size).toBe(CHILD_COUNT + 1);
+  });
+});
+
+// ── classifyMissingIdsDirect parity ─────────────────────────────────────────
+//
+// Mirrors bff/src/test/HierarchyService.test.ts "classifyMissingIds" 1:1 (same
+// status codes, same expected reasons) so a change to either side's status→reason
+// table shows up as a failing test instead of silent drift between the two
+// independently-implemented BFS/classification paths (extension vs standalone).
+
+describe('classifyMissingIdsDirect parity (mirrors BFF classifyMissingIds)', () => {
+  it('returns an empty map for an empty id list without calling getWorkItem', async () => {
+    const result = await classifyMissingIdsDirect('Proj', []);
+    expect(result).toEqual({});
+    expect(witStub.getWorkItem).not.toHaveBeenCalled();
+  });
+
+  it('classifies a 403 error as restricted', async () => {
+    witStub.getWorkItem.mockRejectedValue({ status: 403 });
+    const result = await classifyMissingIdsDirect('Proj', [1]);
+    expect(result[1]).toBe('restricted');
+  });
+
+  it('classifies a 401 error as restricted', async () => {
+    witStub.getWorkItem.mockRejectedValue({ status: 401 });
+    const result = await classifyMissingIdsDirect('Proj', [1]);
+    expect(result[1]).toBe('restricted');
+  });
+
+  it('classifies a 404 error as deleted', async () => {
+    witStub.getWorkItem.mockRejectedValue({ status: 404 });
+    const result = await classifyMissingIdsDirect('Proj', [2]);
+    expect(result[2]).toBe('deleted');
+  });
+
+  it('classifies an unexpected error status as missing', async () => {
+    witStub.getWorkItem.mockRejectedValue({ status: 500 });
+    const result = await classifyMissingIdsDirect('Proj', [3]);
+    expect(result[3]).toBe('missing');
+  });
+
+  it('classifies an id that resolves in isolation as missing (transient batch omission)', async () => {
+    witStub.getWorkItem.mockResolvedValue({ id: 4 });
+    const result = await classifyMissingIdsDirect('Proj', [4]);
+    expect(result[4]).toBe('missing');
   });
 });

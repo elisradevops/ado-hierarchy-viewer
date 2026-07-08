@@ -17,6 +17,7 @@ import { useConfigStore } from './state/configStore';
 import { useHierarchyData } from './hooks/useHierarchyData';
 import { useUrlState } from './hooks/useUrlState';
 import { useAutoRefresh } from './hooks/useAutoRefresh';
+import { useAuthRecovery } from './hooks/useAuthRecovery';
 
 const MAIN_SX = { display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' } as const;
 
@@ -59,6 +60,7 @@ export default function App(): React.ReactElement {
     return () => { cancelled = true; };
   }, [status, connectStandalone]);
   const { loadHierarchy, loading, error } = useHierarchyData();
+  useAuthRecovery(loadHierarchy);
   const rootIds = useHierarchyStore(s => s.rootIds);
   const lastFetchedAt = useHierarchyStore(s => s.lastFetchedAt);
   const config = useConfigStore(s => s.config);

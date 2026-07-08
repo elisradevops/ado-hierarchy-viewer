@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { useConnectionStore } from '../state/connectionStore';
 import { LoginForm } from './LoginForm';
+import { ErrorState } from './ErrorState';
 
 const LOADING_SX = {
   display: 'flex',
@@ -19,12 +20,18 @@ interface ConnectionGateProps {
 export function ConnectionGate({ children }: ConnectionGateProps): React.ReactElement {
   const status = useConnectionStore(s => s.status);
   const mode = useConnectionStore(s => s.mode);
+  const error = useConnectionStore(s => s.error);
 
   if (status === 'connected') {
     return <>{children}</>;
   }
 
   if (mode === 'extension') {
+    // useAuthRecovery sets status 'error' when a token refresh (after 401) fails —
+    // without this branch the app would spin forever instead of prompting a reload.
+    if (status === 'error') {
+      return <ErrorState message={error ?? 'Azure DevOps session expired.'} onRetry={() => window.location.reload()} />;
+    }
     // Extension mode: connecting is automatic via SDK — show loading indicator
     return (
       <Box sx={LOADING_SX}>
