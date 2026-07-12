@@ -31,7 +31,9 @@ vi.mock('../../state/uiPrefsStore', () => ({
 vi.mock('../../state/hierarchyStore', () => ({
   useHierarchyStore: vi.fn((selector: (s: unknown) => unknown) => {
     const state = {
-      rowsById: {},
+      rowsById: {
+        1: { type: 'Bug', state: 'Closed' },
+      },
       usedQueryId: 'q-1',
       matchedIds: null,
       queryColumns: [
@@ -81,5 +83,15 @@ describe('HierarchyToolbar — Columns menu (dynamic query columns)', () => {
     await userEvent.click(screen.getByRole('button', { name: /columns/i }));
     await userEvent.click(screen.getByText('Risk Level'));
     expect(toggleCol).toHaveBeenCalledWith('x:Custom.RiskLevel');
+  });
+
+  it('passes current hierarchy facets into the legend', async () => {
+    renderToolbar();
+    await userEvent.click(screen.getByRole('button', { name: /legend/i }));
+
+    expect(screen.getByText('Work item types in this view (1)')).toBeInTheDocument();
+    expect(screen.getByText('States in this view (1)')).toBeInTheDocument();
+    expect(screen.getByText('Bug')).toBeInTheDocument();
+    expect(screen.getByText('Closed')).toBeInTheDocument();
   });
 });

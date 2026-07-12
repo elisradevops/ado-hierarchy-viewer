@@ -1,5 +1,3 @@
-import { useEffect, useState } from 'react';
-
 export type ThemeMode = 'light' | 'dark';
 
 /**
@@ -39,27 +37,11 @@ export function isDarkBackground(value: string): boolean {
 }
 
 /**
- * Tracks the ADO extension host's light/dark theme. `SDK.init({ applyTheme: true })`
- * (see adoSdk.ts) injects the host's theme as CSS custom properties on `:root` — including
- * `--background-color` — and dispatches a `themeApplied` window event whenever the host's
- * theme changes. Outside the extension host (standalone mode) that event never fires, so
- * this always resolves to 'light', matching the app's previous hard-coded behavior there.
+ * Dark theme support is intentionally disabled: the ADO host's dark palette only
+ * recolored part of the app (e.g. the config sidebar) while other surfaces stayed
+ * light, producing an inconsistent, hard-to-read mix inside the extension. The app
+ * now always renders light, regardless of the host's theme.
  */
 export function useAdoTheme(): ThemeMode {
-  const [mode, setMode] = useState<ThemeMode>('light');
-
-  useEffect(() => {
-    const resolveFromRoot = (): void => {
-      const bg = getComputedStyle(document.documentElement).getPropertyValue('--background-color').trim();
-      if (bg) setMode(isDarkBackground(bg) ? 'dark' : 'light');
-    };
-
-    // Covers the case where SDK.init's applyTheme already ran before this hook mounted.
-    resolveFromRoot();
-
-    window.addEventListener('themeApplied', resolveFromRoot);
-    return () => window.removeEventListener('themeApplied', resolveFromRoot);
-  }, []);
-
-  return mode;
+  return 'light';
 }

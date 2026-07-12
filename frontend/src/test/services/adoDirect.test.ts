@@ -79,6 +79,16 @@ describe('fetchRelationTypesDirect', () => {
     expect((result[0] as { referenceName: string }).referenceName).toBe('System.LinkTypes.Hierarchy-Forward');
   });
 
+  it('accepts numeric usage (some on-prem ADO Server versions serialize the enum as 0/1 instead of strings)', async () => {
+    witStub.getRelationTypes.mockResolvedValue([
+      { referenceName: 'System.LinkTypes.Hierarchy-Forward', name: 'Child', attributes: { usage: 0 } },
+      { referenceName: 'ArtifactLink', name: 'Artifact', attributes: { usage: 1 } },
+    ]);
+    const result = await fetchRelationTypesDirect('', '');
+    expect(result).toHaveLength(1);
+    expect((result[0] as { referenceName: string }).referenceName).toBe('System.LinkTypes.Hierarchy-Forward');
+  });
+
   it('returns empty when signal already aborted', async () => {
     const ctrl = new AbortController();
     ctrl.abort();

@@ -55,9 +55,12 @@ export async function fetchRelationTypesDirect(
   try {
     const client = getClient(WorkItemTrackingRestClient);
     const all = await client.getRelationTypes();
-    // Gap #1: filter to work-item-to-work-item link types only (matches BFF MetadataController)
+    // Gap #1: filter to work-item-to-work-item link types only (matches BFF MetadataController).
+    // The extension SDK's REST client always requests enumsAsNumbers=true, so `usage` arrives
+    // as its raw numeric enum (0) here, not the Cloud API's string form ('workItemLink') —
+    // accept either.
     return (all ?? []).filter(
-      rt => rt.attributes?.['usage'] === 'workItemLink'
+      rt => rt.attributes?.['usage'] === 'workItemLink' || rt.attributes?.['usage'] === 0
     ) as unknown as RelationType[];
   } catch (err) {
     return handleAdoError(err);

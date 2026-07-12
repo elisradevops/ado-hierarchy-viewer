@@ -175,7 +175,7 @@ export function FilterMenu({
       >
         {availableTypes.length > 0 && (
           <Box sx={SECTION_SX}>
-            <Typography sx={SECTION_TITLE_SX}>Available Work Item Types</Typography>
+            <Typography sx={SECTION_TITLE_SX}>Types in this view ({availableTypes.length})</Typography>
             <FormGroup>
               {availableTypes.map(type => {
                 const color = typeColorOf(type);
@@ -223,7 +223,7 @@ export function FilterMenu({
 
         {availableStates.length > 0 && (
           <Box sx={SECTION_SX}>
-            <Typography sx={SECTION_TITLE_SX}>Available States</Typography>
+            <Typography sx={SECTION_TITLE_SX}>States in this view ({availableStates.length})</Typography>
             <FormGroup>
               {availableStates.map(state => (
                 <FormControlLabel

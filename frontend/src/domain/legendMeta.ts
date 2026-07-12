@@ -28,9 +28,13 @@ export function relChipLabel(ref: string): string {
   return relDisplayName(ref).replace(/\s*\(Hierarchy\)$/, '');
 }
 
+// Fallback color for any configured link type outside the known REL_FAMILY_COLORS set
+// (e.g. a project-specific custom link type other than Elisra's CoveredBy).
+export const OTHER_REL_COLOR = '#6B7280';
+
 export function relFamilyColor(ref: string): string {
   const family = (ref.split('.').pop() ?? '').replace(/-Forward$|-Reverse$/, '');
-  return REL_FAMILY_COLORS[family] ?? '#6B7280';
+  return REL_FAMILY_COLORS[family] ?? OTHER_REL_COLOR;
 }
 
 // Amber tint for nodes reached only via the selected-link-type recursive expansion

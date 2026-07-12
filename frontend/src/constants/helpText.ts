@@ -1,4 +1,4 @@
-import { REL_FAMILY_COLORS, DISCOVERED_REL_COLOR, CUT_CYCLE_COLOR, MULTI_PARENT_COLOR, RESTRICTED_COLOR } from '../domain/legendMeta';
+import { REL_FAMILY_COLORS, DISCOVERED_REL_COLOR, CUT_CYCLE_COLOR, MULTI_PARENT_COLOR, RESTRICTED_COLOR, OTHER_REL_COLOR } from '../domain/legendMeta';
 import { STATE_DOT_COLORS } from './stateColors';
 import { TYPE_COLORS } from '../components/TreeRow';
 
@@ -30,13 +30,14 @@ export interface LegendGroup {
 
 export const LEGEND_GROUPS: LegendGroup[] = [
   {
-    title: 'Relationship chips',
+    title: 'Relationship types',
     items: [
       { color: REL_FAMILY_COLORS.Hierarchy, label: 'Child / Parent', description: 'Built-in Azure DevOps parent-child hierarchy link.' },
       { color: REL_FAMILY_COLORS.Related, label: 'Related', description: 'Generic, non-directional link between two work items.' },
       { color: REL_FAMILY_COLORS.Affects, label: 'Affects / Affected By', description: 'Built-in Azure DevOps Affects link.' },
       { color: REL_FAMILY_COLORS.TestedBy, label: 'Tested By / Tests', description: 'Test-to-requirement coverage link.' },
       { color: REL_FAMILY_COLORS.CoveredBy, label: 'Covers / Covered By', description: 'Elisra-custom requirement coverage link.' },
+      { color: OTHER_REL_COLOR, label: 'Other link type', description: 'Any other link type configured on this project — shown with its Azure DevOps display name.' },
       { color: DISCOVERED_REL_COLOR, label: 'Discovered', description: 'Item found by following a selected Link Type outward — not part of the Source Query\'s own results.' },
     ],
   },

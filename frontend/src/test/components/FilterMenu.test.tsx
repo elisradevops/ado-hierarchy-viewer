@@ -27,12 +27,12 @@ function renderMenu(overrides: Partial<React.ComponentProps<typeof FilterMenu>> 
 }
 
 describe('FilterMenu', () => {
-  it('opens a popover with Work Item Types, States, and a query-match switch, separated by dividers', async () => {
+  it('opens a popover with current-view type and state counts and a query-match switch, separated by dividers', async () => {
     renderMenu();
     await userEvent.click(screen.getByRole('button', { name: /filter by type, state, or query match/i }));
 
-    expect(screen.getByText('Available Work Item Types')).toBeInTheDocument();
-    expect(screen.getByText('Available States')).toBeInTheDocument();
+    expect(screen.getByText('Types in this view (2)')).toBeInTheDocument();
+    expect(screen.getByText('States in this view (2)')).toBeInTheDocument();
     expect(screen.getByText('Show only query matches')).toBeInTheDocument();
     const popover = screen.getByRole('presentation');
     expect(within(popover).getAllByRole('separator')).toHaveLength(2);

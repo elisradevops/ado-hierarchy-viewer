@@ -297,7 +297,7 @@ export function HierarchyToolbar({
       <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
 
       {/* Segment 6: Legend — explains chip colors/icons used in the tree */}
-      <LegendPopover />
+      <LegendPopover availableTypes={facets.types} availableStates={facets.states} />
 
       {/* Copy success snackbar */}
       <Snackbar

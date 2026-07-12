@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "id": "ado-hierarchy-viewer",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "name": "ADO Backlog Hierarchy Viewer",
   "publisher": "elisradevops",
   "description": "Live, interactive replacement for the PowerShell ADO backlog hierarchy report.",

@@ -97,8 +97,10 @@ export async function getRelationTypes(req: Request, res: Response, next: NextFu
     const raw = await client.get<{ value: RelationTypeEntry[] }>(url);
     // Only expose work-item link types — artifact/resource links (Hyperlink, GitHub, etc.)
     // are not valid in WIQL WorkItemLinks queries and would cause ADO 400 errors.
+    // Some on-prem ADO Server versions serialize `usage` as its raw numeric enum (0)
+    // instead of the Cloud API's string form ('workItemLink') — accept either.
     const workItemOnly = (raw.value ?? []).filter(
-      rt => rt.attributes?.['usage'] === 'workItemLink'
+      rt => rt.attributes?.['usage'] === 'workItemLink' || rt.attributes?.['usage'] === 0
     );
     const result = { value: workItemOnly };
     cacheSet(key, result);
