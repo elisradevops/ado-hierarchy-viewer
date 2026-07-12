@@ -5,6 +5,12 @@ on:
       - main
     paths-ignore:
       - '.github/**'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '.github/**'
   workflow_dispatch: {}
 
 jobs:
@@ -12,36 +18,50 @@ jobs:
     name: 🚀 publish
     runs-on: ubuntu-latest
     steps:
+      # PRs only need this job to report a status (branch protection requires it) —
+      # the actual version bump / image push only ever happens on push to main or a
+      # manual dispatch, never on a PR.
+      - name: ⏭️ skip on pull_request
+        if: github.event_name == 'pull_request'
+        run: echo "Pull request — publish steps run only on push to main or workflow_dispatch."
+
       - name: 📚 checkout
+        if: github.event_name != 'pull_request'
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.ELISRADEVOPS_ACCESS_TOKEN }}
 
       - name: 🟢 node
+        if: github.event_name != 'pull_request'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       - name: 'Automated Version Bump'
+        if: github.event_name != 'pull_request'
         uses: 'phips28/gh-action-bump-version@master'
         id: bump_version
         with:
           commit-message: 'CI: bumps version to {{version}} [skip ci]'
 
       - name: 🐳 set up QEMU
+        if: github.event_name != 'pull_request'
         uses: docker/setup-qemu-action@v3
 
       - name: 🐳 set up Docker Buildx
+        if: github.event_name != 'pull_request'
         uses: docker/setup-buildx-action@v3
 
       - name: 🔐 login to DockerHub
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: get-npm-version
+        if: github.event_name != 'pull_request'
         id: package-version
         uses: martinbeentjes/npm-get-version-action@master
 
@@ -52,6 +72,7 @@ jobs:
       # VSIX generation happens later, on demand, driven from Kubernetes in
       # production — not baked into this pipeline.
       - name: 🐳 build and push (vsix-builder)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: frontend
