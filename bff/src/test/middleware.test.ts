@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import axios from 'axios';
+import { timingSafeEqual } from 'crypto';
 
 // ── apiKeyMiddleware ───────────────────────────────────────────────────────────
 // We test the middleware function directly (not via config module) to avoid the
@@ -12,7 +13,6 @@ describe('apiKeyMiddleware logic (unit)', () => {
   // Here we test the timingSafeEqual pattern via a simple wrapper.
 
   function checkKey(provided: string, expected: string): boolean {
-    const { timingSafeEqual } = require('crypto');
     const KEY_LENGTH = 64;
     const providedBuf = Buffer.alloc(KEY_LENGTH);
     const expectedBuf = Buffer.alloc(KEY_LENGTH);
@@ -143,8 +143,8 @@ describe('asyncWrapper', () => {
 // ── HealthController ──────────────────────────────────────────────────────────
 
 describe('HealthController', () => {
-  it('responds with status ok and a timestamp', () => {
-    const { getHealth } = require('../controllers/HealthController');
+  it('responds with status ok and a timestamp', async () => {
+    const { getHealth } = await import('../controllers/HealthController');
     const mockRes = {
       json: jest.fn(),
     };

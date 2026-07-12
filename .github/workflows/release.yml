@@ -1,0 +1,73 @@
+name: '🚀 publish - ado-hierarchy-viewer'
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/**'
+
+jobs:
+  release:
+    name: 🚀 publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 📚 checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ELISRADEVOPS_ACCESS_TOKEN }}
+
+      - name: 🟢 node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 'Automated Version Bump'
+        uses: 'phips28/gh-action-bump-version@master'
+        id: bump_version
+        with:
+          commit-message: 'CI: bumps version to {{version}} [skip ci]'
+
+      - name: get-npm-version
+        id: package-version
+        uses: martinbeentjes/npm-get-version-action@master
+
+      - name: 📦 install deps (all workspaces)
+        run: npm ci
+
+      # query-match-core is a file: dependency of frontend — must be built first
+      # so its dist/ is present when frontend compiles.
+      - name: 🔨 build query-match-core
+        run: npm run build --workspace=packages/query-match-core
+
+      - name: 🔨 build frontend
+        run: npm run build --workspace=frontend
+
+      - name: 📦 package VSIX
+        working-directory: frontend
+        run: npm run package -- --override "{\"version\":\"${{ steps.package-version.outputs.current-version }}\"}"
+
+      - name: 🔍 find VSIX
+        id: find-vsix
+        run: |
+          VSIX_PATH=$(ls frontend/ado-extension/out/*.vsix | head -1)
+          echo "vsix_path=$VSIX_PATH" >> $GITHUB_OUTPUT
+
+      - name: ⬆️ upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ado-hierarchy-viewer-${{ steps.package-version.outputs.current-version }}
+          path: ${{ steps.find-vsix.outputs.vsix_path }}
+          if-no-files-found: error
+
+      - name: 🏷️ create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.package-version.outputs.current-version }}
+          name: v${{ steps.package-version.outputs.current-version }}
+          files: ${{ steps.find-vsix.outputs.vsix_path }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
