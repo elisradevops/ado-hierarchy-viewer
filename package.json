@@ -1,8 +1,12 @@
 {
   "name": "ado-hierarchy-viewer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "workspaces": ["frontend", "bff", "packages/query-match-core"],
+  "workspaces": [
+    "frontend",
+    "bff",
+    "packages/query-match-core"
+  ],
   "engines": {
     "node": ">=22"
   }
