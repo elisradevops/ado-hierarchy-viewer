@@ -1,0 +1,76 @@
+name: '🚀 CI'
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '.github/**'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: 🔨 build, lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📚 checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 📦 install deps
+        run: npm ci
+
+      # query-match-core is a file: dependency of both bff and frontend — must be
+      # built first so its dist/ is present when the other workspaces compile.
+      - name: 🔨 build query-match-core
+        run: npm run build --workspace=packages/query-match-core
+
+      # BFF — standalone-mode regression coverage (the frontend talks to this
+      # server when not running as an ADO extension).
+      - name: 🔍 lint bff
+        run: npm run lint --workspace=bff
+
+      - name: 🔨 build bff
+        run: npm run build --workspace=bff
+
+      - name: 🧪 test bff
+        run: npm test --workspace=bff -- --forceExit
+
+      # Frontend — covers both extension mode (adoDirect/adoSdk/useAdoContext) and
+      # standalone mode (hierarchyApi/BFF client) from the same test suite.
+      - name: 🔍 lint frontend
+        run: npm run lint --workspace=frontend
+
+      - name: 🔨 build frontend
+        run: npm run build --workspace=frontend
+
+      - name: 🧪 test frontend
+        run: npm test --workspace=frontend
+
+      - name: ⬆️ upload frontend build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/ado-extension/dist
+          if-no-files-found: error
+          retention-days: 3
+
+      # Packages the ADO extension exactly as release.yml would — catches a broken
+      # manifest, missing contribution assets, or bad tfx invocation *before* merge,
+      # since a new version is only ever shipped as this one .vsix file.
+      - name: 📦 package VSIX (dry run)
+        working-directory: frontend
+        run: npm run package -- --override "{\"version\":\"0.0.0\"}"
+
+      - name: ⬆️ upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-preview
+          path: frontend/ado-extension/out/*.vsix
+          if-no-files-found: error
+          retention-days: 7
