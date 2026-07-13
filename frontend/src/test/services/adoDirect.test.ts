@@ -241,11 +241,11 @@ describe('fetchQueriesDirect', () => {
     expect(sysEng?.queryType).toBeUndefined();
   });
 
-  it('requests a deep depth so queries nested more than 2 folders down are actually fetched', async () => {
+  it('requests depth=2 — the server-enforced maximum (ADO Server 2022.1 400s above this: "Acceptable range of depth of query tree is between 0 to 2")', async () => {
     witStub.getQueries.mockResolvedValue([]);
     await fetchQueriesDirect('', '', 'MyProject');
     const [, , depthArg] = witStub.getQueries.mock.calls[0];
-    expect(depthArg).toBe(10);
+    expect(depthArg).toBe(2);
   });
 });
 

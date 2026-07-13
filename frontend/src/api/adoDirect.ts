@@ -484,11 +484,16 @@ function mapQueryItem(item: SdkQueryItem): QueryTreeNode {
   };
 }
 
-// Azure DevOps query folders are rarely more than a handful of levels deep in
-// practice, but a hardcoded shallow depth (previously 2) silently drops any
-// query nested deeper than that from the tree entirely — it's not just
-// misclassified, it's never fetched, so nothing to select/copy an ID from.
-const QUERY_TREE_DEPTH = 10;
+// ADO's queries API hard-caps $depth at 2 server-side — confirmed against a
+// real on-prem ADO Server 2022.1 instance, which 400s with "Acceptable range of
+// depth of query tree is between 0 to 2" for anything higher. A previous fix
+// here bumped this to 10 to reach queries nested deeper than 2 folders, which
+// works against ADO Services/newer Server versions but breaks on-prem 2022.1
+// entirely. Capped back at the documented-safe maximum; queries nested deeper
+// than 2 folder levels are a known remaining limitation — see isFolderEntry
+// below for the still-valid fix to the misclassification bug (a folder at the
+// depth boundary missing its own isFolder flag).
+const QUERY_TREE_DEPTH = 2;
 
 export async function fetchQueriesDirect(
   _orgUrl: string,

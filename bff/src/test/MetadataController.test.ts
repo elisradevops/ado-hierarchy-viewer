@@ -315,15 +315,14 @@ describe('MetadataController', () => {
       expect(sysEng.queryType).toBeUndefined();
     });
 
-    it('requests a deep $depth so queries nested more than 2 folders down are actually fetched', async () => {
+    it('requests $depth=2 — the server-enforced maximum (ADO Server 2022.1 400s above this: "Acceptable range of depth of query tree is between 0 to 2")', async () => {
       mockGet.mockResolvedValueOnce({ id: 'root', name: 'My Queries', path: '/', isFolder: true, hasChildren: false });
       mockGet.mockRejectedValueOnce(new Error('no shared'));
 
       await request(app).get('/api/queries?project=MyProj').set(ADO_HEADERS);
 
       const [myQueriesUrl] = mockGet.mock.calls[0];
-      expect(myQueriesUrl).not.toMatch(/\$depth=2(?!\d)/);
-      expect(myQueriesUrl).toMatch(/\$depth=10\b/);
+      expect(myQueriesUrl).toMatch(/\$depth=2\b/);
     });
   });
 
