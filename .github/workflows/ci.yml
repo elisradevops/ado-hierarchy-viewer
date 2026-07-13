@@ -98,6 +98,6 @@ jobs:
       - name: 🐳 build (vsix-builder, no push)
         uses: docker/build-push-action@v6
         with:
-          context: frontend
+          context: .
           file: frontend/src/deployment/dockerfile.vsix-builder
           push: false
