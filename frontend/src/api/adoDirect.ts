@@ -461,17 +461,34 @@ type SdkQueryItem = {
   children?: SdkQueryItem[];
 };
 
+// ADO's queries API can return a folder at the requested $depth boundary
+// without its own `isFolder` flag populated (only its own metadata, not its
+// children, gets fully hydrated at the cutoff level) — defaulting straight to
+// `?? false` then misclassifies that folder as a selectable query. A real
+// query always has a queryType; a folder never does — use that as a fallback
+// signal when isFolder itself is missing.
+function isFolderEntry(item: SdkQueryItem): boolean {
+  return item.isFolder ?? item.queryType == null;
+}
+
 function mapQueryItem(item: SdkQueryItem): QueryTreeNode {
+  const isFolder = isFolderEntry(item);
   return {
     id: item.id,
     name: item.name,
     path: item.path ?? '',
-    isFolder: item.isFolder ?? false,
+    isFolder,
     hasChildren: item.hasChildren ?? false,
-    queryType: item.isFolder ? undefined : (item.queryType as QueryTreeNode['queryType']),
+    queryType: isFolder ? undefined : (item.queryType as QueryTreeNode['queryType']),
     children: item.children ? item.children.map(mapQueryItem) : undefined,
   };
 }
+
+// Azure DevOps query folders are rarely more than a handful of levels deep in
+// practice, but a hardcoded shallow depth (previously 2) silently drops any
+// query nested deeper than that from the tree entirely — it's not just
+// misclassified, it's never fetched, so nothing to select/copy an ID from.
+const QUERY_TREE_DEPTH = 10;
 
 export async function fetchQueriesDirect(
   _orgUrl: string,
@@ -482,7 +499,7 @@ export async function fetchQueriesDirect(
   if (signal?.aborted) return [];
   try {
     const client = getClient(WorkItemTrackingRestClient);
-    const items = await client.getQueries(project, QueryExpand.All, 2);
+    const items = await client.getQueries(project, QueryExpand.All, QUERY_TREE_DEPTH);
     return (items ?? []).map(item => mapQueryItem(item as unknown as SdkQueryItem));
   } catch (err) {
     return handleAdoError(err);

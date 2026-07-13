@@ -216,6 +216,37 @@ describe('fetchQueriesDirect', () => {
     expect(result[0].isFolder).toBe(true);
     expect(result[0].children?.[0]).toMatchObject({ id: 'q-1', name: 'Active Bugs', queryType: 'flat' });
   });
+
+  it('bug repro: a folder missing isFolder at the $depth boundary is still classified as a folder, not a query', async () => {
+    // Reproduces "Shared Queries -> ALM -> SysENG" showing SysENG as a
+    // selectable query: ADO can return a folder at the requested depth cutoff
+    // without its own isFolder flag hydrated. Real queries always have a
+    // queryType; folders never do — that's the fallback signal.
+    witStub.getQueries.mockResolvedValue([
+      { id: 'shared', name: 'Shared Queries', path: '/', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'alm', name: 'ALM', path: '/ALM', isFolder: true, hasChildren: true,
+            children: [
+              // isFolder and hasChildren omitted entirely, no queryType either —
+              // matches the ADO depth-boundary quirk.
+              { id: 'sys-eng', name: 'SysENG', path: '/ALM/SysENG' },
+            ],
+          },
+        ],
+      },
+    ]);
+    const result = await fetchQueriesDirect('', '', 'MyProject');
+    const sysEng = result[0].children?.[0].children?.[0];
+    expect(sysEng?.isFolder).toBe(true);
+    expect(sysEng?.queryType).toBeUndefined();
+  });
+
+  it('requests a deep depth so queries nested more than 2 folders down are actually fetched', async () => {
+    witStub.getQueries.mockResolvedValue([]);
+    await fetchQueriesDirect('', '', 'MyProject');
+    const [, , depthArg] = witStub.getQueries.mock.calls[0];
+    expect(depthArg).toBe(10);
+  });
 });
 
 // ── fetchQueryRootIdsDirect ────────────────────────────────────────────────
