@@ -20,12 +20,12 @@ mkdir -p "$out_dir"
 backend_env_value="$(printenv 'BACKEND-URL-PLACEHOLDER-Bff' 2>/dev/null || true)"
 vite_env_value="$(printenv 'VITE_BFF_BASE_URL' 2>/dev/null || true)"
 
-# VSIX_VERSION lets the caller pin the extension version to match something
+# VERSION lets the caller pin the extension version to match something
 # external (e.g. the Docker image tag / app version) instead of always getting
 # a fresh timestamp — set at image build time (see dockerfile.vsix-builder's
-# VSIX_VERSION build arg) so an image tagged X always packages extension
-# version X by default, unless overridden again at `docker run` time.
-node - "$manifest_path" "${VSIX_VERSION:-}" <<'NODE'
+# VERSION build arg) so an image tagged X always packages extension version X
+# by default, unless overridden again at `docker run -e VERSION=...` time.
+node - "$manifest_path" "${VERSION:-}" <<'NODE'
 const fs = require('fs');
 const p = process.argv[2] || process.argv[1];
 const pinned = process.argv[3];

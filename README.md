@@ -76,14 +76,13 @@ cd bff && npm test           # 68 Jest tests, coverage thresholds
 3. Run: `./frontend/src/deployment/build-extension-from-container.sh <container-id> <bff-url>`
 4. The .vsix is output to `frontend/vsix-out/`
 
-Or use the VSIX builder image:
+Or use the VSIX builder image — the frontend build is baked in at image build
+time (from repo root context), so only an output volume is needed at run time:
 ```bash
 docker build -f frontend/src/deployment/dockerfile.vsix-builder -t vsix-builder .
-docker run --rm \
-  -v $(pwd)/frontend/ado-extension/dist:/work/dist \
-  -v $(pwd)/frontend/ado-extension:/work \
-  -v $(pwd)/frontend/vsix-out:/opt/ado-extension/out \
-  vsix-builder
+docker run --rm -v $(pwd)/frontend/vsix-out:/out vsix-builder
+# Pin the packaged extension version (defaults to a UTC timestamp otherwise):
+docker run --rm -e VERSION=1.2.3 -v $(pwd)/frontend/vsix-out:/out vsix-builder
 ```
 
 ## Kubernetes Deployment

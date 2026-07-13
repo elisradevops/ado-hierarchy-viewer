@@ -1,27 +1,51 @@
+# Bakes the frontend build into the image at build time (matches the working
+# pattern in azure-devops-extension-cascading-picklist and
+# vsts-extension-multivalue-control's Dockerfile.vsix-builder) — NOT the
+# runtime-mounted-dist approach this file used before, which required a Helm
+# job to mount /work/dist + /work/vss-extension.json that nothing supplied.
+# Only /out needs mounting when running this image.
+FROM node:22-slim AS builder
+
+WORKDIR /app
+
+# query-match-core is a file: dependency of frontend — copy+install the whole
+# workspace so npm ci can resolve it, then build query-match-core before frontend.
+COPY package*.json ./
+COPY frontend/package*.json frontend/
+COPY bff/package*.json bff/
+COPY packages/query-match-core/package*.json packages/query-match-core/
+RUN npm ci
+
+COPY packages/query-match-core packages/query-match-core
+COPY frontend frontend
+RUN npm run build --workspace=packages/query-match-core \
+  && npm run build --workspace=frontend
+
+# ---- runtime image ----
 FROM node:22-slim
 
+ARG VERSION
+ENV VERSION=${VERSION}
+
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-     ca-certificates \
-     file \
+  && apt-get install -y --no-install-recommends ca-certificates file \
   && rm -rf /var/lib/apt/lists/* \
   && npm install -g tfx-cli
 
 WORKDIR /opt/ado-extension
 
-COPY src/deployment /tmp/deployment
-RUN chmod +x /tmp/deployment/*.sh
+COPY --from=builder /app/frontend/ado-extension/dist ./dist
+COPY --from=builder /app/frontend/ado-extension/vss-extension.json .
+
+COPY frontend/src/deployment/create-vsix.sh /tmp/deployment/create-vsix.sh
+RUN chmod +x /tmp/deployment/create-vsix.sh
 
 ENV VSIX_ROOT_DIR=/opt/ado-extension
-ENV VSIX_OUT_DIR=/opt/ado-extension/out
-ENV VSIX_SRC_DIST=/work/dist
-ENV VSIX_SRC_MANIFEST=/work/vss-extension.json
+ENV VSIX_OUT_DIR=/out
+RUN mkdir -p /out
 
-# Pins the packaged extension's version to match this image's own tag/app version
-# (set via --build-arg at build time, e.g. release.yml's package-version step).
-# Empty by default — falls back to a timestamp-based version (see create-vsix.sh)
-# for local/manual builds that don't pass one.
-ARG VSIX_VERSION=""
-ENV VSIX_VERSION=${VSIX_VERSION}
-
-ENTRYPOINT ["/bin/sh", "/tmp/deployment/run-vsix-builder.sh"]
+# Mount /out when running to receive the .vsix file:
+#   docker run --rm -v $(pwd)/out:/out elisradevops/ado-hierarchy-viewer-vsix-builder
+# Set VERSION to override the manifest version:
+#   docker run --rm -e VERSION=1.2.3 -v $(pwd)/out:/out elisradevops/ado-hierarchy-viewer-vsix-builder
+ENTRYPOINT ["/bin/sh", "/tmp/deployment/create-vsix.sh"]
