@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Box, Chip, Typography, alpha } from '@mui/material';
 import type { SummaryStats } from '../selectors/summaryStats';
 import { getStateDotColor } from '../theme/stateDot';
+import { readableChipTextColor } from '../theme/chipColor';
 import { TYPE_COLORS } from './TreeRow';
 import { useWorkItemMetaStore } from '../state/workItemMetaStore';
 
@@ -68,7 +69,7 @@ function buildTypeChipSx(color: string) {
     fontSize: '0.65rem',
     height: 18,
     backgroundColor: alpha(color, 0.1),
-    color,
+    color: readableChipTextColor(color),
     border: `1px solid ${alpha(color, 0.25)}`,
     '& .MuiChip-label': { px: '6px', fontWeight: 600 },
   };
@@ -79,7 +80,7 @@ function buildStateChipSx(color: string) {
     fontSize: '0.65rem',
     height: 18,
     backgroundColor: alpha(color, 0.1),
-    color,
+    color: readableChipTextColor(color),
     border: `1px solid ${alpha(color, 0.25)}`,
     '& .MuiChip-label': { px: '6px' },
   };

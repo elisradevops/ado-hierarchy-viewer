@@ -69,7 +69,7 @@ export function buildGridCols(cols: ColumnDef[], colWidths?: Record<string, numb
 /** Minimum px width for the table based on the currently visible columns.
  *  User-overridden widths are respected so SCROLL_INNER/BODY_WRAPPER/Virtuoso
  *  stay wide enough to actually render all row content without clipping. */
-export function buildMinTableWidth(cols: ColumnDef[], titleMin = 200, colWidths?: Record<string, number>): number {
+export function buildMinTableWidth(cols: ColumnDef[], titleMin = 280, colWidths?: Record<string, number>): number {
   let total = 0;
   for (const col of cols) {
     if (col.key === 'title') {

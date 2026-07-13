@@ -1,4 +1,4 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useId, useEffect } from 'react';
 import {
   Alert, Box, Divider, IconButton, InputAdornment,
   ListItemIcon, Menu, MenuItem, Snackbar, TextField, Tooltip, Typography,
@@ -18,12 +18,14 @@ import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import CheckBoxOutlineBlankIcon from '@mui/icons-material/CheckBoxOutlineBlank';
 import CheckBoxIcon from '@mui/icons-material/CheckBox';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useIsNarrowViewport } from '../hooks/useIsNarrowViewport';
 import { useUiPrefsStore } from '../state/uiPrefsStore';
 import { COLUMN_DEFS, buildDynamicColumns } from '../constants/columns';
 import { useHierarchyStore } from '../state/hierarchyStore';
 import { useConfigStore } from '../state/configStore';
-import { AUTO_REFRESH_OPTIONS } from '../constants/ui';
+import { AUTO_REFRESH_OPTIONS, NARROW_TOOLBAR_PX } from '../constants/ui';
 import { downloadCsv, flatRowsToCsv } from '../utils/exportCsv';
 import { copyToClipboard, flatRowsToTsv } from '../utils/clipboard';
 import { getFacetValues } from '../selectors/facetValues';
@@ -84,6 +86,20 @@ export function HierarchyToolbar({
   const [copyError, setCopyError] = useState(false);
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [colAnchor, setColAnchor] = useState<HTMLElement | null>(null);
+  const [legendAnchor, setLegendAnchor] = useState<HTMLElement | null>(null);
+  const legendPopoverId = useId();
+  // Below this width, Density/Columns/Legend fold into "More actions" instead of
+  // wrapping into a broken multi-row layout. Reactive (not a one-shot sticky
+  // preference like the sidebar's auto-collapse) — toolbar icon visibility should
+  // just follow available width.
+  const isToolbarNarrow = useIsNarrowViewport(NARROW_TOOLBAR_PX);
+  // Closes the Legend popover whenever the toolbar crosses the narrow/wide breakpoint —
+  // without this, an anchor set from the narrow-mode MenuItem (pointing at the "More
+  // actions" button) would linger after widening past the breakpoint, leaving the popover
+  // open but anchored to a control that no longer represents it.
+  useEffect(() => {
+    setLegendAnchor(null);
+  }, [isToolbarNarrow]);
 
   // Non-always columns — drives the Columns menu
   const toggleableColumns = useMemo(() => COLUMN_DEFS.filter(c => !c.always), []);
@@ -223,21 +239,50 @@ export function HierarchyToolbar({
           <ListItemIcon sx={{ minWidth: 28 }}><PrintIcon fontSize="small" /></ListItemIcon>
           Print
         </MenuItem>
+        {isToolbarNarrow && (
+          <>
+            <Divider sx={{ my: 0.5 }} />
+            <MenuItem dense onClick={() => { setDensity(density === 'comfortable' ? 'compact' : 'comfortable'); setMoreAnchor(null); }}>
+              <ListItemIcon sx={{ minWidth: 28 }}>
+                {density === 'compact' ? <DensitySmallIcon fontSize="small" /> : <DensityMediumIcon fontSize="small" />}
+              </ListItemIcon>
+              Density: {density === 'compact' ? 'Compact' : 'Comfortable'}
+            </MenuItem>
+            <MenuItem dense onClick={() => { setColAnchor(moreAnchor); setMoreAnchor(null); }}>
+              <ListItemIcon sx={{ minWidth: 28 }}><ViewColumnIcon fontSize="small" /></ListItemIcon>
+              Columns…
+            </MenuItem>
+            <MenuItem
+              dense
+              aria-haspopup="true"
+              aria-controls={legendAnchor ? legendPopoverId : undefined}
+              aria-expanded={legendAnchor ? 'true' : undefined}
+              onClick={() => { setLegendAnchor(moreAnchor); setMoreAnchor(null); }}
+            >
+              <ListItemIcon sx={{ minWidth: 28 }}><HelpOutlineIcon fontSize="small" /></ListItemIcon>
+              Legend
+            </MenuItem>
+          </>
+        )}
       </Menu>
 
-      <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
+      {!isToolbarNarrow && (
+        <>
+          <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
 
-      {/* Segment 5: Density + columns (view-state controls reached for repeatedly — kept direct) */}
-      <Tooltip title={`Density: ${density}`}>
-        <IconButton size="small" onClick={() => setDensity(density === 'comfortable' ? 'compact' : 'comfortable')}>
-          {density === 'compact' ? <DensitySmallIcon fontSize="small" /> : <DensityMediumIcon fontSize="small" />}
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Columns" disableHoverListener={Boolean(colAnchor)}>
-        <IconButton size="small" onClick={e => setColAnchor(e.currentTarget)}>
-          <ViewColumnIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
+          {/* Segment 5: Density + columns (view-state controls reached for repeatedly — kept direct) */}
+          <Tooltip title={`Density: ${density}`}>
+            <IconButton size="small" onClick={() => setDensity(density === 'comfortable' ? 'compact' : 'comfortable')}>
+              {density === 'compact' ? <DensitySmallIcon fontSize="small" /> : <DensityMediumIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Columns" disableHoverListener={Boolean(colAnchor)}>
+            <IconButton size="small" onClick={e => setColAnchor(e.currentTarget)}>
+              <ViewColumnIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </>
+      )}
       <Menu
         anchorEl={colAnchor}
         open={Boolean(colAnchor)}
@@ -294,10 +339,24 @@ export function HierarchyToolbar({
         </MenuItem>
       </Menu>
 
-      <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />
+      {!isToolbarNarrow && <Divider orientation="vertical" flexItem sx={DIVIDER_SX} />}
 
-      {/* Segment 6: Legend — explains chip colors/icons used in the tree */}
-      <LegendPopover availableTypes={facets.types} availableStates={facets.states} />
+      {/* Segment 6: Legend — explains chip colors/icons used in the tree. Single
+          always-controlled instance so there's exactly one anchor/open state to manage —
+          wide mode shows its own trigger button; narrow mode opens it from the "Legend"
+          MenuItem inside "More actions" (anchored to the still-mounted More button) and
+          hides the trigger instead. Avoids a stale/duplicate popover if isToolbarNarrow
+          flips while the narrow-mode popover is open. */}
+      <LegendPopover
+        id={legendPopoverId}
+        hideTrigger={isToolbarNarrow}
+        open={Boolean(legendAnchor)}
+        anchorEl={legendAnchor}
+        onOpen={(el) => setLegendAnchor(el)}
+        onClose={() => setLegendAnchor(null)}
+        availableTypes={facets.types}
+        availableStates={facets.states}
+      />
 
       {/* Copy success snackbar */}
       <Snackbar

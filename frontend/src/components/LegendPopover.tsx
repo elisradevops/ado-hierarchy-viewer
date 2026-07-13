@@ -1,4 +1,4 @@
-import React, { useId, useState } from 'react';
+import React, { useId } from 'react';
 import { Box, Divider, IconButton, Popover, Tooltip, Typography, alpha } from '@mui/material';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import LoopIcon from '@mui/icons-material/Loop';
@@ -30,6 +30,21 @@ const LABEL_SX = { fontSize: '0.78rem', color: 'text.primary' } as const;
 interface LegendPopoverProps {
   availableTypes: string[];
   availableStates: string[];
+  /** Always controlled — a single anchor/open state lives in the caller (HierarchyToolbar),
+   *  since it needs to be shared between the wide-mode trigger button and the narrow-mode
+   *  "Legend" MenuItem inside "More actions" (only one anchor exists at a time either way). */
+  open: boolean;
+  anchorEl: HTMLElement | null;
+  onClose: () => void;
+  /** Fired by this component's own trigger button (skipped when hideTrigger is set). */
+  onOpen: (anchorEl: HTMLElement) => void;
+  /** Skips rendering the internal trigger button — the caller opens this popover from its
+   *  own control instead (e.g. a MenuItem on narrow viewports). */
+  hideTrigger?: boolean;
+  /** Externally-supplied id so a caller-owned trigger (e.g. the narrow-mode MenuItem) can
+   *  wire its own aria-controls to this popover instead of losing that relationship when
+   *  hideTrigger skips the internal trigger button. Falls back to an internally-generated id. */
+  id?: string;
 }
 
 const WARNING_ICON_BY_LABEL = {
@@ -45,10 +60,18 @@ function fallbackTypeIconUrl(orgUrl: string | null, type: string): string | unde
   return `${base}_apis/wit/workitemicons/${iconId}?api-version=7.1`;
 }
 
-export function LegendPopover({ availableTypes, availableStates }: LegendPopoverProps): React.ReactElement {
-  const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
-  const popoverId = useId();
-  const open = Boolean(anchorEl);
+export function LegendPopover({
+  availableTypes,
+  availableStates,
+  open,
+  anchorEl,
+  onClose,
+  onOpen,
+  hideTrigger = false,
+  id,
+}: LegendPopoverProps): React.ReactElement {
+  const internalId = useId();
+  const popoverId = id ?? internalId;
   const orgUrl = useConnectionStore(s => s.orgUrl);
   const apiTypeColors = useWorkItemMetaStore(s => s.typeColors);
   const apiTypeIconUrls = useWorkItemMetaStore(s => s.typeIconUrls);
@@ -61,22 +84,24 @@ export function LegendPopover({ availableTypes, availableStates }: LegendPopover
 
   return (
     <>
-      <Tooltip title="Legend — what the chips and colors mean">
-        <IconButton
-          size="small"
-          aria-controls={open ? popoverId : undefined}
-          aria-haspopup="true"
-          aria-expanded={open ? 'true' : undefined}
-          onClick={(e) => setAnchorEl(e.currentTarget)}
-        >
-          <HelpOutlineIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
+      {!hideTrigger && (
+        <Tooltip title="Legend — what the chips and colors mean">
+          <IconButton
+            size="small"
+            aria-controls={open ? popoverId : undefined}
+            aria-haspopup="true"
+            aria-expanded={open ? 'true' : undefined}
+            onClick={(e) => onOpen(e.currentTarget)}
+          >
+            <HelpOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       <Popover
         id={popoverId}
         open={open}
         anchorEl={anchorEl}
-        onClose={() => setAnchorEl(null)}
+        onClose={onClose}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >

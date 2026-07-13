@@ -2,12 +2,21 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ThemeProvider } from '@mui/material';
 import { LIGHT_COMFORTABLE } from '../../theme/theme';
-import { TimeProgressBar } from '../../components/ProgressBar';
+import { ProgressBar, TimeProgressBar } from '../../components/ProgressBar';
+import { contrast } from '../fixtures/contrast';
 
 function renderTime(props: { completed: number; remaining: number; estimate?: number; overdueCount?: number }) {
   return render(
     <ThemeProvider theme={LIGHT_COMFORTABLE}>
       <TimeProgressBar {...props} />
+    </ThemeProvider>
+  );
+}
+
+function renderPct(props: { value: number; closedLeaves?: number; totalLeaves?: number }) {
+  return render(
+    <ThemeProvider theme={LIGHT_COMFORTABLE}>
+      <ProgressBar {...props} />
     </ThemeProvider>
   );
 }
@@ -85,5 +94,21 @@ describe('TimeProgressBar', () => {
       expect(screen.getByText('+5.0h over')).toBeInTheDocument();
       expect(screen.queryByText('1 item over budget')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('ProgressBar — text contrast', () => {
+  it('regression: amber (0-40%) percentage text clears WCAG AA against white, not raw #f59e0b', () => {
+    renderPct({ value: 20, closedLeaves: 2, totalLeaves: 10 });
+    const pctEl = screen.getByText('20.0%');
+    const color = getComputedStyle(pctEl).color;
+    expect(contrast(color, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('green (≥80%) and navy (40-79%) percentage text still render (no-op through the contrast helper)', () => {
+    renderPct({ value: 90 });
+    expect(screen.getByText('90.0%')).toBeInTheDocument();
+    renderPct({ value: 60 });
+    expect(screen.getByText('60.0%')).toBeInTheDocument();
   });
 });

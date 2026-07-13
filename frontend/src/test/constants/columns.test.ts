@@ -1,4 +1,4 @@
-import { COLUMN_DEFS, buildDynamicColumns, dynamicColKey, DYNAMIC_COL_PREFIX } from '../../constants/columns';
+import { COLUMN_DEFS, buildDynamicColumns, buildMinTableWidth, dynamicColKey, DYNAMIC_COL_PREFIX, type ColumnDef } from '../../constants/columns';
 
 describe('COLUMN_DEFS order', () => {
   it('groups all effort/estimate columns contiguously', () => {
@@ -82,5 +82,31 @@ describe('buildDynamicColumns', () => {
     ]);
     expect(cols).toHaveLength(1);
     expect(cols[0].field).toBe('Custom.RiskLevel');
+  });
+});
+
+describe('buildMinTableWidth', () => {
+  const titleOnly: ColumnDef[] = [{ key: 'title', label: 'Title', width: 'minmax(0, 1fr)', always: true }];
+
+  it('uses the 280px Title floor by default — child-row chrome (chevron/dot/rel chip/id) previously left only ~1-2 readable chars at the old 200px floor', () => {
+    expect(buildMinTableWidth(titleOnly)).toBe(280);
+  });
+
+  it('a colWidths.title override wins over the default floor', () => {
+    expect(buildMinTableWidth(titleOnly, 280, { title: 400 })).toBe(400);
+  });
+
+  it('sums fixed-px columns alongside the Title floor', () => {
+    const cols: ColumnDef[] = [
+      ...titleOnly,
+      { key: 'type', label: 'Type', width: '120px', always: true },
+      { key: 'state', label: 'State', width: '110px', always: true },
+    ];
+    expect(buildMinTableWidth(cols)).toBe(280 + 120 + 110);
+  });
+
+  it('a colWidths override on a fixed-px column wins over its declared width', () => {
+    const cols: ColumnDef[] = [...titleOnly, { key: 'type', label: 'Type', width: '120px', always: true }];
+    expect(buildMinTableWidth(cols, 280, { type: 200 })).toBe(280 + 200);
   });
 });

@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { Chip, alpha } from '@mui/material';
 import { getStateDotColor } from '../theme/stateDot';
+import { readableChipTextColor } from '../theme/chipColor';
 import { useWorkItemMetaStore } from '../state/workItemMetaStore';
 
 interface StateChipProps {
@@ -12,7 +13,7 @@ export const StateChip = React.memo(function StateChip({ state }: StateChipProps
   const color = apiStateColors[state.toLowerCase()] ?? getStateDotColor(state);
   const chipSx = useMemo(() => ({
     backgroundColor: alpha(color, 0.12),
-    color,
+    color: readableChipTextColor(color),
     borderColor: alpha(color, 0.35),
     border: '1px solid',
     fontWeight: 500,
