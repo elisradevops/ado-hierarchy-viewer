@@ -48,8 +48,9 @@ jobs:
       # Pushes the reusable VSIX-builder image only — it doesn't bundle a specific
       # frontend build. At runtime it expects dist/ + vss-extension.json mounted in
       # (VSIX_SRC_DIST / VSIX_SRC_MANIFEST) and packages whatever it's given via
-      # tfx, auto-stamping a timestamp-based version (see create-vsix.sh). Actual
-      # VSIX generation happens later, on demand, driven from Kubernetes in
+      # tfx. VSIX_VERSION is baked in as the same version as the image tag, so the
+      # extension version it produces by default matches the app/image version —
+      # actual VSIX generation happens later, on demand, driven from Kubernetes in
       # production — not baked into this pipeline.
       - name: 🐳 build and push (vsix-builder)
         uses: docker/build-push-action@v6
@@ -58,6 +59,8 @@ jobs:
           file: frontend/src/deployment/dockerfile.vsix-builder
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VSIX_VERSION=${{ steps.package-version.outputs.current-version }}
           tags: |
             elisradevops/ado-hierarchy-viewer-vsix-builder:${{ steps.package-version.outputs.current-version }}
             elisradevops/ado-hierarchy-viewer-vsix-builder:latest

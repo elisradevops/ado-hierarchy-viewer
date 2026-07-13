@@ -17,4 +17,11 @@ ENV VSIX_OUT_DIR=/opt/ado-extension/out
 ENV VSIX_SRC_DIST=/work/dist
 ENV VSIX_SRC_MANIFEST=/work/vss-extension.json
 
+# Pins the packaged extension's version to match this image's own tag/app version
+# (set via --build-arg at build time, e.g. release.yml's package-version step).
+# Empty by default — falls back to a timestamp-based version (see create-vsix.sh)
+# for local/manual builds that don't pass one.
+ARG VSIX_VERSION=""
+ENV VSIX_VERSION=${VSIX_VERSION}
+
 ENTRYPOINT ["/bin/sh", "/tmp/deployment/run-vsix-builder.sh"]
