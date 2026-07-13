@@ -195,14 +195,25 @@ export async function getWorkItemTypeMeta(req: Request, res: Response, next: Nex
   }
 }
 
+// ADO's queries API can return a folder at the requested $depth boundary
+// without its own `isFolder` flag populated (only its own metadata, not its
+// children, gets fully hydrated at the cutoff level) — defaulting straight to
+// `?? false` then misclassifies that folder as a selectable query. A real
+// query always has a queryType; a folder never does — use that as a fallback
+// signal when isFolder itself is missing.
+function isFolderEntry(entry: AzureQueryEntry): boolean {
+  return entry.isFolder ?? entry.queryType == null;
+}
+
 function mapQueryEntry(entry: AzureQueryEntry): QueryTreeNode {
+  const isFolder = isFolderEntry(entry);
   return {
     id: entry.id,
     name: entry.name,
     path: entry.path,
-    isFolder: entry.isFolder ?? false,
+    isFolder,
     hasChildren: entry.hasChildren ?? false,
-    queryType: entry.isFolder ? undefined : (entry.queryType as QueryTreeNode['queryType']),
+    queryType: isFolder ? undefined : (entry.queryType as QueryTreeNode['queryType']),
     children: entry.children ? entry.children.map(mapQueryEntry) : undefined,
   };
 }
@@ -229,9 +240,14 @@ export async function getQueries(req: Request, res: Response, next: NextFunction
     const normalizedUrl = creds.orgUrl.endsWith('/') ? creds.orgUrl : `${creds.orgUrl}/`;
     const baseUrl = `${normalizedUrl}${encodeURIComponent(project)}/_apis/wit/queries`;
 
+    // Azure DevOps query folders are rarely more than a handful of levels deep
+    // in practice, but a hardcoded shallow depth (previously 2) silently drops
+    // any query nested deeper than that from the tree entirely — it's not just
+    // misclassified, it's never fetched, so nothing to select/copy an ID from.
+    const QUERY_TREE_DEPTH = 10;
     const [myQueriesResult, sharedQueriesResult] = await Promise.allSettled([
-      client.get<AzureQueryEntry>(`${baseUrl}/My Queries?$depth=2&$expand=all&api-version=7.1`),
-      client.get<AzureQueryEntry>(`${baseUrl}/Shared Queries?$depth=2&$expand=all&api-version=7.1`),
+      client.get<AzureQueryEntry>(`${baseUrl}/My Queries?$depth=${QUERY_TREE_DEPTH}&$expand=all&api-version=7.1`),
+      client.get<AzureQueryEntry>(`${baseUrl}/Shared Queries?$depth=${QUERY_TREE_DEPTH}&$expand=all&api-version=7.1`),
     ]);
 
     const roots: QueryTreeNode[] = [];

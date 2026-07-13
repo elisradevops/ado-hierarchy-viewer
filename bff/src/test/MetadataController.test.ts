@@ -287,6 +287,44 @@ describe('MetadataController', () => {
       expect(leaf.queryType).toBe('flat');
       expect(leaf.isFolder).toBe(false);
     });
+
+    it('bug repro: a folder missing isFolder at the $depth boundary is still classified as a folder, not a query', async () => {
+      // Reproduces "Shared Queries -> ALM -> SysENG" showing SysENG as a
+      // selectable query: ADO can return a folder at the requested $depth
+      // cutoff without its own isFolder flag hydrated. Real queries always
+      // have a queryType; folders never do — that's the fallback signal.
+      const root = {
+        id: 'root', name: 'Shared Queries', path: '/', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'alm', name: 'ALM', path: '/ALM', isFolder: true, hasChildren: true,
+            children: [
+              // isFolder omitted entirely, hasChildren omitted too — matches the
+              // ADO depth-boundary quirk. No queryType either (folders never have one).
+              { id: 'sys-eng', name: 'SysENG', path: '/ALM/SysENG' },
+            ],
+          },
+        ],
+      };
+      mockGet.mockResolvedValueOnce(root).mockRejectedValueOnce(new Error('no shared'));
+
+      const res = await request(app).get('/api/queries?project=MyProj').set(ADO_HEADERS);
+      expect(res.status).toBe(200);
+      const sysEng = res.body[0].children[0].children[0];
+      expect(sysEng.id).toBe('sys-eng');
+      expect(sysEng.isFolder).toBe(true);
+      expect(sysEng.queryType).toBeUndefined();
+    });
+
+    it('requests a deep $depth so queries nested more than 2 folders down are actually fetched', async () => {
+      mockGet.mockResolvedValueOnce({ id: 'root', name: 'My Queries', path: '/', isFolder: true, hasChildren: false });
+      mockGet.mockRejectedValueOnce(new Error('no shared'));
+
+      await request(app).get('/api/queries?project=MyProj').set(ADO_HEADERS);
+
+      const [myQueriesUrl] = mockGet.mock.calls[0];
+      expect(myQueriesUrl).not.toMatch(/\$depth=2(?!\d)/);
+      expect(myQueriesUrl).toMatch(/\$depth=10\b/);
+    });
   });
 
   // ── GET /api/projects ───────────────────────────────────────────────────────
