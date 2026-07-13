@@ -43,6 +43,7 @@ interface AzureQueryEntry {
   hasChildren?: boolean;
   queryType?: string;
   children?: AzureQueryEntry[];
+  url?: string;
 }
 
 export interface QueryTreeNode {
@@ -205,6 +206,36 @@ function isFolderEntry(entry: AzureQueryEntry): boolean {
   return entry.isFolder ?? entry.queryType == null;
 }
 
+// ADO caps $depth at 2 server-side (see comment on QUERY_TREE_DEPTH below), so a
+// folder that sits exactly at the cutoff arrives with hasChildren=true but no
+// children populated. Rather than requesting a bigger depth (which 400s on
+// on-prem ADO Server), re-fetch that specific folder's own resource at $depth=2
+// and splice its children in — recursing as deep as needed. Mirrors the
+// ensureQueryChildren/collectHistoricalQueries pattern already proven in
+// docgen-data-provider-package's TicketsDataProvider.ts for this exact constraint.
+async function fillTruncatedFolders(
+  client: AdoClient,
+  entry: AzureQueryEntry,
+  visited: Set<string> = new Set()
+): Promise<void> {
+  if (!isFolderEntry(entry) || visited.has(entry.id)) return;
+  visited.add(entry.id);
+
+  if (entry.hasChildren && (!entry.children || entry.children.length === 0) && entry.url) {
+    try {
+      const refreshed = await client.get<AzureQueryEntry>(`${entry.url}?$depth=2&$expand=all&api-version=7.1`);
+      entry.children = refreshed.children;
+    } catch (err) {
+      logger.warn(`fillTruncatedFolders: re-fetch failed for folder ${entry.id}, leaving childless`, { err });
+      return;
+    }
+  }
+
+  if (entry.children && entry.children.length > 0) {
+    await Promise.all(entry.children.map(child => fillTruncatedFolders(client, child, visited)));
+  }
+}
+
 function mapQueryEntry(entry: AzureQueryEntry): QueryTreeNode {
   const isFolder = isFolderEntry(entry);
   return {
@@ -246,7 +277,8 @@ export async function getQueries(req: Request, res: Response, next: NextFunction
     // fix here bumped this to 10 to reach queries nested deeper than 2 folders,
     // which works against ADO Services/newer Server versions but breaks on-prem
     // 2022.1 entirely. Capped back at the documented-safe maximum; queries nested
-    // deeper than 2 folder levels are a known remaining limitation — see
+    // deeper than 2 folder levels are reached instead via fillTruncatedFolders
+    // below, which re-fetches each truncated folder individually. See
     // isFolderEntry below for the still-valid fix to the misclassification bug
     // (a folder at the depth boundary missing its own isFolder flag).
     const QUERY_TREE_DEPTH = 2;
@@ -256,8 +288,14 @@ export async function getQueries(req: Request, res: Response, next: NextFunction
     ]);
 
     const roots: QueryTreeNode[] = [];
-    if (myQueriesResult.status === 'fulfilled') roots.push(mapQueryEntry(myQueriesResult.value));
-    if (sharedQueriesResult.status === 'fulfilled') roots.push(mapQueryEntry(sharedQueriesResult.value));
+    if (myQueriesResult.status === 'fulfilled') {
+      await fillTruncatedFolders(client, myQueriesResult.value);
+      roots.push(mapQueryEntry(myQueriesResult.value));
+    }
+    if (sharedQueriesResult.status === 'fulfilled') {
+      await fillTruncatedFolders(client, sharedQueriesResult.value);
+      roots.push(mapQueryEntry(sharedQueriesResult.value));
+    }
 
     cacheSet(key, roots);
     res.json(roots);

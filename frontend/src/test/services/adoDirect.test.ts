@@ -247,6 +247,69 @@ describe('fetchQueriesDirect', () => {
     const [, , depthArg] = witStub.getQueries.mock.calls[0];
     expect(depthArg).toBe(2);
   });
+
+  it('re-fetches a folder truncated at the depth=2 boundary and splices in its deeper children', async () => {
+    // Shared Queries -> ALM -> SysENG -> SubFolder -> ActualQuery: SysENG
+    // arrives hasChildren=true with no children (depth cutoff) — should
+    // re-fetch via getQuery(project, id, ...) and recurse into the result.
+    witStub.getQueries.mockResolvedValue([
+      { id: 'shared', name: 'Shared Queries', path: '/', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'alm', name: 'ALM', path: '/ALM', isFolder: true, hasChildren: true,
+            children: [
+              { id: 'sys-eng', name: 'SysENG', path: '/ALM/SysENG', isFolder: true, hasChildren: true },
+            ],
+          },
+        ],
+      },
+    ]);
+    witStub.getQuery.mockResolvedValue({
+      id: 'sys-eng', name: 'SysENG', path: '/ALM/SysENG', isFolder: true, hasChildren: true,
+      children: [
+        { id: 'sub-folder', name: 'SubFolder', path: '/ALM/SysENG/SubFolder', isFolder: true, hasChildren: true,
+          children: [
+            { id: 'actual-query', name: 'ActualQuery', path: '/ALM/SysENG/SubFolder/ActualQuery', isFolder: false, hasChildren: false, queryType: 'flat' },
+          ],
+        },
+      ],
+    });
+
+    const result = await fetchQueriesDirect('', '', 'MyProject');
+
+    expect(witStub.getQuery).toHaveBeenCalledWith('MyProject', 'sys-eng', 3 /* QueryExpand.All */, 2);
+    const subFolder = result[0].children?.[0].children?.[0].children?.[0];
+    expect(subFolder?.id).toBe('sub-folder');
+    const actualQuery = subFolder?.children?.[0];
+    expect(actualQuery?.id).toBe('actual-query');
+    expect(actualQuery?.isFolder).toBe(false);
+  });
+
+  it('fails soft when a truncated folder re-fetch rejects — folder stays present but childless', async () => {
+    witStub.getQueries.mockResolvedValue([
+      { id: 'sys-eng', name: 'SysENG', path: '/SysENG', isFolder: true, hasChildren: true },
+    ]);
+    witStub.getQuery.mockRejectedValue(new Error('re-fetch failed'));
+
+    const result = await fetchQueriesDirect('', '', 'MyProject');
+    expect(result[0].id).toBe('sys-eng');
+    expect(result[0].children).toBeUndefined();
+  });
+
+  it('visited guard prevents infinite recursion on cyclic/malformed data', async () => {
+    witStub.getQueries.mockResolvedValue([
+      { id: 'loopy', name: 'Loopy', path: '/Loopy', isFolder: true, hasChildren: true },
+    ]);
+    witStub.getQuery.mockResolvedValue({
+      id: 'loopy', name: 'Loopy', path: '/Loopy', isFolder: true, hasChildren: true,
+      children: [
+        { id: 'loopy', name: 'Loopy', path: '/Loopy', isFolder: true, hasChildren: true },
+      ],
+    });
+
+    await fetchQueriesDirect('', '', 'MyProject');
+
+    expect(witStub.getQuery).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── fetchQueryRootIdsDirect ────────────────────────────────────────────────

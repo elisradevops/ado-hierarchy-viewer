@@ -324,6 +324,100 @@ describe('MetadataController', () => {
       const [myQueriesUrl] = mockGet.mock.calls[0];
       expect(myQueriesUrl).toMatch(/\$depth=2\b/);
     });
+
+    it('re-fetches a folder truncated at the $depth=2 boundary and splices in its deeper children', async () => {
+      // Shared Queries -> ALM -> SysENG -> SubFolder -> ActualQuery: SysENG
+      // arrives hasChildren=true with no children (depth cutoff) but has a url —
+      // fillTruncatedFolders should re-fetch it and recurse into the result.
+      const root = {
+        id: 'root', name: 'Shared Queries', path: '/', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'alm', name: 'ALM', path: '/ALM', isFolder: true, hasChildren: true,
+            children: [
+              { id: 'sys-eng', name: 'SysENG', path: '/ALM/SysENG', isFolder: true, hasChildren: true,
+                url: 'https://ado.example/proj/_apis/wit/queries/sys-eng' },
+            ],
+          },
+        ],
+      };
+      const refetchedSysEng = {
+        id: 'sys-eng', name: 'SysENG', path: '/ALM/SysENG', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'sub-folder', name: 'SubFolder', path: '/ALM/SysENG/SubFolder', isFolder: true, hasChildren: true,
+            children: [
+              { id: 'actual-query', name: 'ActualQuery', path: '/ALM/SysENG/SubFolder/ActualQuery', isFolder: false, hasChildren: false, queryType: 'flat' },
+            ],
+          },
+        ],
+      };
+      mockGet
+        .mockResolvedValueOnce(root)
+        .mockRejectedValueOnce(new Error('no shared'))
+        .mockResolvedValueOnce(refetchedSysEng);
+
+      const res = await request(app).get('/api/queries?project=MyProj').set(ADO_HEADERS);
+      expect(res.status).toBe(200);
+
+      const refetchCall = mockGet.mock.calls.find(([url]) => url.includes('sys-eng'));
+      expect(refetchCall?.[0]).toMatch(/\$depth=2\b/);
+
+      const subFolder = res.body[0].children[0].children[0].children[0];
+      expect(subFolder.id).toBe('sub-folder');
+      const actualQuery = subFolder.children[0];
+      expect(actualQuery.id).toBe('actual-query');
+      expect(actualQuery.isFolder).toBe(false);
+    });
+
+    it('fails soft when a truncated folder re-fetch rejects — returns 200 with the folder present but childless', async () => {
+      const root = {
+        id: 'root', name: 'Shared Queries', path: '/', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'sys-eng', name: 'SysENG', path: '/SysENG', isFolder: true, hasChildren: true,
+            url: 'https://ado.example/proj/_apis/wit/queries/sys-eng' },
+        ],
+      };
+      mockGet
+        .mockResolvedValueOnce(root)
+        .mockRejectedValueOnce(new Error('no shared'))
+        .mockRejectedValueOnce(new Error('re-fetch failed'));
+
+      const res = await request(app).get('/api/queries?project=MyProj').set(ADO_HEADERS);
+      expect(res.status).toBe(200);
+      const sysEng = res.body[0].children[0];
+      expect(sysEng.id).toBe('sys-eng');
+      expect(sysEng.children).toBeUndefined();
+    });
+
+    it('visited guard prevents infinite recursion on cyclic/malformed data', async () => {
+      // Malformed tree: 'loopy' is truncated (hasChildren, no children, has a
+      // url), and its own re-fetch result nests a child with the SAME id —
+      // without the visited guard this recurses into 'loopy' forever.
+      const root = {
+        id: 'root', name: 'Shared Queries', path: '/', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'loopy', name: 'Loopy', path: '/Loopy', isFolder: true, hasChildren: true,
+            url: 'https://ado.example/proj/_apis/wit/queries/loopy' },
+        ],
+      };
+      const refetchedLoopy = {
+        id: 'loopy', name: 'Loopy', path: '/Loopy', isFolder: true, hasChildren: true,
+        children: [
+          { id: 'loopy', name: 'Loopy', path: '/Loopy', isFolder: true, hasChildren: true,
+            url: 'https://ado.example/proj/_apis/wit/queries/loopy' },
+        ],
+      };
+      mockGet
+        .mockResolvedValueOnce(root)
+        .mockRejectedValueOnce(new Error('no shared'))
+        .mockResolvedValueOnce(refetchedLoopy);
+
+      const res = await request(app).get('/api/queries?project=MyProj').set(ADO_HEADERS);
+      expect(res.status).toBe(200);
+      // Only one re-fetch call should have happened for 'loopy' (visited guard
+      // skips the second occurrence of the same id nested inside the result).
+      const loopyRefetches = mockGet.mock.calls.filter(([url]) => url.includes('loopy')).length;
+      expect(loopyRefetches).toBe(1);
+    });
   });
 
   // ── GET /api/projects ───────────────────────────────────────────────────────

@@ -471,6 +471,36 @@ function isFolderEntry(item: SdkQueryItem): boolean {
   return item.isFolder ?? item.queryType == null;
 }
 
+// ADO caps $depth at 2 server-side (see QUERY_TREE_DEPTH below), so a folder
+// at the cutoff arrives with hasChildren=true but no children populated.
+// Rather than requesting a bigger depth (400s on-prem), re-fetch that specific
+// folder via the SDK's getQuery(project, id, ...) at $depth=2 and splice its
+// children in — recursing as deep as needed. Mirrors the
+// ensureQueryChildren/collectHistoricalQueries pattern already proven in
+// docgen-data-provider-package's TicketsDataProvider.ts for this exact constraint.
+async function fillTruncatedFoldersDirect(
+  client: WorkItemTrackingRestClient,
+  item: SdkQueryItem,
+  project: string,
+  visited: Set<string> = new Set()
+): Promise<void> {
+  if (!isFolderEntry(item) || visited.has(item.id)) return;
+  visited.add(item.id);
+
+  if (item.hasChildren && (!item.children || item.children.length === 0)) {
+    try {
+      const refreshed = await client.getQuery(project, item.id, QueryExpand.All, 2);
+      item.children = (refreshed as unknown as SdkQueryItem | undefined)?.children;
+    } catch {
+      return;
+    }
+  }
+
+  if (item.children && item.children.length > 0) {
+    await Promise.all(item.children.map(child => fillTruncatedFoldersDirect(client, child, project, visited)));
+  }
+}
+
 function mapQueryItem(item: SdkQueryItem): QueryTreeNode {
   const isFolder = isFolderEntry(item);
   return {
@@ -490,9 +520,10 @@ function mapQueryItem(item: SdkQueryItem): QueryTreeNode {
 // here bumped this to 10 to reach queries nested deeper than 2 folders, which
 // works against ADO Services/newer Server versions but breaks on-prem 2022.1
 // entirely. Capped back at the documented-safe maximum; queries nested deeper
-// than 2 folder levels are a known remaining limitation — see isFolderEntry
-// below for the still-valid fix to the misclassification bug (a folder at the
-// depth boundary missing its own isFolder flag).
+// than 2 folder levels are reached instead via fillTruncatedFoldersDirect
+// below, which re-fetches each truncated folder individually. See
+// isFolderEntry below for the still-valid fix to the misclassification bug
+// (a folder at the depth boundary missing its own isFolder flag).
 const QUERY_TREE_DEPTH = 2;
 
 export async function fetchQueriesDirect(
@@ -504,8 +535,9 @@ export async function fetchQueriesDirect(
   if (signal?.aborted) return [];
   try {
     const client = getClient(WorkItemTrackingRestClient);
-    const items = await client.getQueries(project, QueryExpand.All, QUERY_TREE_DEPTH);
-    return (items ?? []).map(item => mapQueryItem(item as unknown as SdkQueryItem));
+    const items = (await client.getQueries(project, QueryExpand.All, QUERY_TREE_DEPTH)) as unknown as SdkQueryItem[];
+    await Promise.all((items ?? []).map(item => fillTruncatedFoldersDirect(client, item, project)));
+    return (items ?? []).map(item => mapQueryItem(item));
   } catch (err) {
     return handleAdoError(err);
   }
