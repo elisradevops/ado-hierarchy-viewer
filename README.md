@@ -134,8 +134,20 @@ helm upgrade --install ado-hierarchy-viewer \
 
 ## CI/CD
 
-Uses Azure DevOps Pipelines (`azure-pipelines.yml`). Stages:
+### Azure DevOps Pipelines (`azure-pipelines.yml`)
 1. Build & Test (frontend + BFF)
 2. Docker build & push to ACR
 3. VSIX packaging
 4. Helm deploy to dev (auto) / prod (manual approval)
+
+### GitHub Actions (`.github/workflows/`)
+- `ci.yml` — on every PR: build/lint/test frontend + BFF, plus a VSIX packaging
+  dry run (catches a broken manifest or packaging failure before merge). Also
+  runnable manually via `workflow_dispatch`.
+- `release.yml` — on push to `main`: auto version-bump, then builds and pushes
+  a reusable `elisradevops/ado-hierarchy-viewer-vsix-builder` Docker image to
+  DockerHub. That image bundles only tfx-cli + packaging scripts, not a
+  frontend build — it expects `dist/` and `vss-extension.json` mounted in at
+  runtime and packages whatever it's given. Actual VSIX generation happens on
+  demand in production (e.g. a Kubernetes Job), not in CI. Also runnable
+  manually via `workflow_dispatch`.
