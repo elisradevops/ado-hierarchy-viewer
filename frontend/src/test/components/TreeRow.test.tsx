@@ -3,6 +3,7 @@ import { ThemeProvider } from '@mui/material';
 import { LIGHT_COMFORTABLE } from '../../theme/theme';
 import { TreeRow } from '../../components/TreeRow';
 import { useHierarchyStore } from '../../state/hierarchyStore';
+import { contrast } from '../fixtures/contrast';
 import type { FlatRow, TreeNode } from '../../types';
 
 function makeRow(overrides: Partial<TreeNode> = {}): FlatRow {
@@ -253,5 +254,43 @@ describe('TreeRow — cut-cycle indicator', () => {
   it('renders no cycle icon when cutCycles is an empty array', () => {
     const { container } = renderRow(makeRow({ cutCycles: [] }));
     expect(container.querySelector('[data-testid="LoopIcon"]')).not.toBeInTheDocument();
+  });
+});
+
+describe('TreeRow — chip text contrast', () => {
+  afterEach(() => {
+    useHierarchyStore.getState().clear();
+  });
+
+  it('regression: Affects rel chip text clears WCAG AA against white', () => {
+    useHierarchyStore.setState({ usedQueryId: '', matchedIds: null });
+    const { container } = renderRow(makeRow({ linkRel: 'Elisra.Affects-Forward' }));
+    const chip = container.querySelector('[data-testid="LinkIcon"]')?.closest('span');
+    expect(chip).toBeTruthy();
+    const color = getComputedStyle(chip as Element).color;
+    expect(contrast(color, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('cut-cycle chip text clears WCAG AA against white', () => {
+    const { container } = renderRow(makeRow({
+      cutCycles: [{ target: 1, via: 'System.LinkTypes.Hierarchy-Forward', path: [1, 2, 1] }],
+    }));
+    const chip = container.querySelector('[data-testid="LoopIcon"]')?.closest('span');
+    const color = getComputedStyle(chip as Element).color;
+    expect(contrast(color, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('multi-parent (duplicate link) chip text clears WCAG AA against white', () => {
+    const { container } = renderRow(makeRow({ multiParents: [1, 2] }));
+    const chip = container.querySelector('[data-testid="WarningAmberIcon"]')?.closest('span');
+    const color = getComputedStyle(chip as Element).color;
+    expect(contrast(color, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('restricted (no access) chip text clears WCAG AA against white', () => {
+    const { container } = renderRow(makeRow({ placeholderReason: 'restricted' }));
+    const chip = container.querySelector('[data-testid="LockIcon"]')?.closest('span');
+    const color = getComputedStyle(chip as Element).color;
+    expect(contrast(color, '#ffffff')).toBeGreaterThanOrEqual(4.5);
   });
 });

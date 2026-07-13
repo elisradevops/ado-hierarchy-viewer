@@ -16,6 +16,13 @@ export const WORKER_THRESHOLD = 1500;
 // the table stays usable instead of forcing heavy horizontal scroll.
 export const NARROW_VIEWPORT_PX = 700;
 
+// Below this width, the toolbar folds Density/Columns/Legend into the "More
+// actions" menu instead of letting them wrap into a broken multi-row layout.
+// Deliberately wider (and reactive, not one-shot) than NARROW_VIEWPORT_PX — the
+// toolbar runs out of room well before the sidebar's own breakpoint matters;
+// they're independent axes, not substitutes for each other.
+export const NARROW_TOOLBAR_PX = 950;
+
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 export const AUTO_REFRESH_OPTIONS = [

@@ -8,6 +8,7 @@ import LoopIcon from '@mui/icons-material/Loop';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import LockIcon from '@mui/icons-material/Lock';
 import { StateChip } from './StateChip';
+import { readableChipTextColor } from '../theme/chipColor';
 import { ProgressBar, TimeProgressBar } from './ProgressBar';
 import { buildWorkItemUrl } from '../utils/adoUrlUtils';
 import {
@@ -96,7 +97,7 @@ function buildTypeBadgeSx(color: string) {
     borderRadius: '999px',
     whiteSpace: 'nowrap' as const,
     backgroundColor: alpha(color, 0.1),
-    color,
+    color: readableChipTextColor(color),
     border: `1px solid ${alpha(color, 0.25)}`,
   };
 }
@@ -132,6 +133,23 @@ const REL_CHIP_SX = {
 } as const;
 
 const REL_CHIP_ICON_SX = { fontSize: '10px' } as const;
+
+// Same readable-text treatment as buildTypeBadgeSx above — a chip's accent color
+// used directly as its own text color can fail WCAG contrast for lighter hues
+// (e.g. Affects orange, TestedBy green). See theme/chipColor.ts.
+function buildRelChipSx(color: string) {
+  return {
+    ...REL_CHIP_SX,
+    bgcolor: alpha(color, 0.1),
+    color: readableChipTextColor(color),
+    border: `1px solid ${alpha(color, 0.25)}`,
+  };
+}
+
+// Fixed-color chips — precomputed once (mirrors TYPE_BADGE_SX_MAP above).
+const CUT_CYCLE_CHIP_SX = buildRelChipSx(CUT_CYCLE_COLOR);
+const MULTI_PARENT_CHIP_SX = buildRelChipSx(MULTI_PARENT_COLOR);
+const RESTRICTED_CHIP_SX = buildRelChipSx(RESTRICTED_COLOR);
 
 const ID_SX = {
   fontSize: '0.68rem',
@@ -349,7 +367,7 @@ export const TreeRow = React.memo(function TreeRow({
                   {showRelChip && (
                     <Box
                       component="span"
-                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(relColor, 0.1), color: relColor, border: `1px solid ${alpha(relColor, 0.25)}` }}
+                      sx={buildRelChipSx(relColor)}
                       title={isDiscoveredRel ? `${relTitle} — found via recursive link-type expansion, not the source query` : relTitle}
                     >
                       {isDiscoveredRel
@@ -367,7 +385,7 @@ export const TreeRow = React.memo(function TreeRow({
                   {hasCutCycles && (
                     <Box
                       component="span"
-                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(CUT_CYCLE_COLOR, 0.1), color: CUT_CYCLE_COLOR, border: `1px solid ${alpha(CUT_CYCLE_COLOR, 0.25)}` }}
+                      sx={CUT_CYCLE_CHIP_SX}
                       title={cutCycleTitle}
                     >
                       <LoopIcon sx={REL_CHIP_ICON_SX} />
@@ -377,7 +395,7 @@ export const TreeRow = React.memo(function TreeRow({
                   {hasMultiParents && (
                     <Box
                       component="span"
-                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(MULTI_PARENT_COLOR, 0.1), color: MULTI_PARENT_COLOR, border: `1px solid ${alpha(MULTI_PARENT_COLOR, 0.25)}` }}
+                      sx={MULTI_PARENT_CHIP_SX}
                       title={multiParentTitle}
                     >
                       <WarningAmberIcon sx={REL_CHIP_ICON_SX} />
@@ -387,7 +405,7 @@ export const TreeRow = React.memo(function TreeRow({
                   {isRestricted && (
                     <Box
                       component="span"
-                      sx={{ ...REL_CHIP_SX, bgcolor: alpha(RESTRICTED_COLOR, 0.1), color: RESTRICTED_COLOR, border: `1px solid ${alpha(RESTRICTED_COLOR, 0.25)}` }}
+                      sx={RESTRICTED_CHIP_SX}
                       title={`No access to #${node.id} with the current token/PAT`}
                     >
                       <LockIcon sx={REL_CHIP_ICON_SX} />

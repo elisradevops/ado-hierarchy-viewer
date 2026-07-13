@@ -165,7 +165,7 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
   }, [presentTypesKey, fieldsByType, hiddenCols, queryColumnsKey, effortField]);
 
   const gridCols = useMemo(() => buildGridCols(visibleColumns, colWidths), [visibleColumns, colWidths]);
-  const minTableWidth = useMemo(() => buildMinTableWidth(visibleColumns, 200, colWidths), [visibleColumns, colWidths]);
+  const minTableWidth = useMemo(() => buildMinTableWidth(visibleColumns, 280, colWidths), [visibleColumns, colWidths]);
   // P4: stable sx object — avoids new object on every render
   const scrollInnerSx = useMemo(() => ({ ...SCROLL_INNER_SX, minWidth: minTableWidth }), [minTableWidth]);
 
@@ -260,14 +260,26 @@ export function HierarchyTreeTable({ onRefresh }: HierarchyTreeTableProps): Reac
 
   // Ask the ADO host to resize the hub iframe whenever the rendered content's
   // height could have changed — visible row count (data load, expand/collapse,
-  // filtering) or density (row height). Debounced so rapid changes (e.g. typing
-  // into the search filter, which re-narrows visibleRows on every keystroke) collapse
-  // into one resize call instead of firing the SDK's cross-frame call on every keystroke.
-  // No-op outside the extension host.
+  // filtering), density (row height), or the browser window itself resizing.
+  // SDK.resize() (called by requestResize) is a one-time snapshot of the current
+  // document size, not a live binding — the ADO host never re-checks it on its own,
+  // so without also tracking window resize the iframe would stay pinned at whatever
+  // size was last reported when the user shrinks the browser window. All three
+  // triggers share one debounce (via useDebouncedValue) so rapid changes — typing
+  // into the search filter, or dragging the window edge — collapse into a single
+  // resize call instead of firing the SDK's cross-frame call repeatedly. No-op
+  // outside the extension host.
+  const [resizeTick, setResizeTick] = useState(0);
+  useEffect(() => {
+    const onWindowResize = (): void => setResizeTick(t => t + 1);
+    window.addEventListener('resize', onWindowResize);
+    return () => window.removeEventListener('resize', onWindowResize);
+  }, []);
   const debouncedRowCount = useDebouncedValue(visibleRows.length);
+  const debouncedResizeTick = useDebouncedValue(resizeTick);
   useEffect(() => {
     requestResize();
-  }, [debouncedRowCount, density]);
+  }, [debouncedRowCount, density, debouncedResizeTick]);
 
   const handleColSort = (col: SortCol): void => {
     setSort({ col, dir: sort.col === col && sort.dir === 'asc' ? 'desc' : 'asc' });

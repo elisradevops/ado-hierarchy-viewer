@@ -1,11 +1,18 @@
 import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { safeToFixed } from '../utils/numberGuards';
+import { readableChipTextColor } from '../theme/chipColor';
 
 // Overdue is a distinct semantic state (work exceeds estimate) — not on the
 // green/navy/amber progress scale, so it gets its own reserved color.
 const OVERDUE_COLOR = '#B91C1C';
 const UNDER_ESTIMATE_COLOR = '#15803d';
+// Text-safe variants — the raw colors above are also used as solid *text* color
+// (not just a bar fill), so they're run through the same WCAG-darkening helper
+// the chip components use. No-op for colors that already pass; OVERDUE_COLOR
+// already clears AA so this is a no-op there, UNDER_ESTIMATE_COLOR is borderline.
+const OVERDUE_TEXT = readableChipTextColor(OVERDUE_COLOR);
+const UNDER_ESTIMATE_TEXT = readableChipTextColor(UNDER_ESTIMATE_COLOR);
 
 // ─── Progress cell (dominant %, secondary count + bar) ─────────────────────
 // Percentage is the primary scan target — bold, color-coded, on its own line
@@ -57,8 +64,10 @@ function getBarColor(value: number): string {
 
 // The 0% bar fill color is deliberately near-invisible against the track; reused as text
 // color it would be illegible, so the percentage number gets a distinct, still-muted shade.
+// getBarColor's amber (0-40% range) fails WCAG contrast as solid text on white — darken it
+// via readableChipTextColor; navy/green already pass so this is a no-op for those.
 function getProgressTextColor(value: number): string {
-  return value > 0 ? getBarColor(value) : 'rgba(15,23,42,0.35)';
+  return value > 0 ? readableChipTextColor(getBarColor(value)) : 'rgba(15,23,42,0.35)';
 }
 
 interface ProgressBarProps {
@@ -105,14 +114,14 @@ export const TimeProgressBar = React.memo(function TimeProgressBar({ completed, 
   let barColor: string;
   if (isOverdue) {
     label = `+${safeToFixed(safeCompleted - safeEstimate, 1)}h over`;
-    textColor = OVERDUE_COLOR;
+    textColor = OVERDUE_TEXT;
     barColor = OVERDUE_COLOR;
   } else if (safeOverdueCount > 0) {
     // This node itself isn't net-over, but a descendant is — the classic masking case
     // (e.g. one child 5h under + another 5h over nets this row to "done"). Surfaces the
     // count only when the node's own number wouldn't have shown a problem.
     label = safeOverdueCount === 1 ? '1 item over budget' : `${safeOverdueCount} items over budget`;
-    textColor = OVERDUE_COLOR;
+    textColor = OVERDUE_TEXT;
     barColor = OVERDUE_COLOR;
   } else if (safeRemaining > 0) {
     label = `${safeToFixed(safeRemaining, 1)}h left`;
@@ -120,7 +129,7 @@ export const TimeProgressBar = React.memo(function TimeProgressBar({ completed, 
     barColor = getBarColor(clamped);
   } else if (hasEstimate && safeCompleted < safeEstimate) {
     label = `${safeToFixed(safeEstimate - safeCompleted, 1)}h under`;
-    textColor = UNDER_ESTIMATE_COLOR;
+    textColor = UNDER_ESTIMATE_TEXT;
     barColor = UNDER_ESTIMATE_COLOR;
   } else if (baseline > 0) {
     label = 'done';
