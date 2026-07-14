@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readableChipTextColor } from '../../theme/chipColor';
+import { readableChipTextColor, iconColorFromUrl } from '../../theme/chipColor';
 import { contrast } from '../fixtures/contrast';
 
 describe('readableChipTextColor', () => {
@@ -37,5 +37,32 @@ describe('readableChipTextColor', () => {
   it('darkens the progress-bar amber (#f59e0b) until it clears WCAG AA', () => {
     expect(contrast('#f59e0b', '#ffffff')).toBeLessThan(4.5);
     expect(contrast(readableChipTextColor('#f59e0b'), '#ffffff')).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('iconColorFromUrl', () => {
+  it('parses a 6-digit color= param (Requirement drift repro: icon teal, WorkItemType.color stale pink)', () => {
+    expect(iconColorFromUrl('https://ado.example/_apis/wit/workItemIcons/icon_list?color=2496C4&v=2')).toBe('#2496C4');
+  });
+
+  it('parses a 3-digit color= param', () => {
+    expect(iconColorFromUrl('https://ado.example/icon?color=abc')).toBe('#abc');
+  });
+
+  it('parses color= when it is not the last param', () => {
+    expect(iconColorFromUrl('https://ado.example/icon?color=CC293D&v=2')).toBe('#CC293D');
+  });
+
+  it('returns undefined for a URL with no color param', () => {
+    expect(iconColorFromUrl('https://ado.example/_apis/wit/workitemicons/icon_crown?api-version=7.1')).toBeUndefined();
+  });
+
+  it('returns undefined for empty/missing url', () => {
+    expect(iconColorFromUrl('')).toBeUndefined();
+    expect(iconColorFromUrl(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for a malformed color value', () => {
+    expect(iconColorFromUrl('https://ado.example/icon?color=zzz')).toBeUndefined();
   });
 });

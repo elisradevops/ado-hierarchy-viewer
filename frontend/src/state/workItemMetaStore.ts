@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { iconColorFromUrl } from '../theme/chipColor';
 
 export interface WorkItemTypeMeta {
   types: Array<{ name: string; color: string; iconUrl: string }>;
@@ -25,7 +26,9 @@ export const useWorkItemMetaStore = create<WorkItemMetaStore>((set) => ({
     const typeColors: Record<string, string> = {};
     const typeIconUrls: Record<string, string> = {};
     for (const t of meta.types) {
-      typeColors[t.name] = t.color;
+      // Icon's baked-in color (when present) is more trustworthy than
+      // WorkItemType.color — see iconColorFromUrl for why they can drift.
+      typeColors[t.name] = iconColorFromUrl(t.iconUrl) ?? t.color;
       if (t.iconUrl) typeIconUrls[t.name] = t.iconUrl;
     }
     set({ typeColors, typeIconUrls, stateColors: meta.stateColors, fieldsByType: meta.fieldsByType ?? {} });
