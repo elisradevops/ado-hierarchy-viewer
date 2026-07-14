@@ -55,3 +55,18 @@ export function readableChipTextColor(baseColor: string, background = '#ffffff')
   }
   return color;
 }
+
+/**
+ * ADO's work item icon URL (`.../_apis/wit/workItemIcons/{iconId}?color={hex}&v=2`)
+ * is documented to embed the same color as WorkItemType.color, but on customized/
+ * inherited process templates the two can drift out of sync — confirmed against a
+ * real on-prem instance where WorkItemType.color for Requirement was stale (pink)
+ * while the icon's baked-in color (teal, matching the actual process configuration)
+ * was correct. So the icon's embedded color is the more trustworthy source when
+ * present; WorkItemType.color is only a fallback for types with no icon URL yet.
+ */
+export function iconColorFromUrl(iconUrl: string | undefined): string | undefined {
+  if (!iconUrl) return undefined;
+  const match = iconUrl.match(/[?&]color=([0-9a-fA-F]{3}|[0-9a-fA-F]{6})(?:&|$)/);
+  return match ? `#${match[1]}` : undefined;
+}
